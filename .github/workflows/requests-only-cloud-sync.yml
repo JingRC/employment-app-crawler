@@ -1,0 +1,99 @@
+name: requests-only-cloud-sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: Comma-separated source codes. Use none to skip all sources.
+        required: false
+        default: qdhr,sdgxbys,ncss24365,jobmohrss
+      validate_startup:
+        description: Only validate startup, database initialization, and summary writing.
+        required: false
+        type: boolean
+        default: false
+      retry_once_on_failure:
+        description: Retry the sync command once if the first attempt fails.
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: '15 */8 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: requests-only-cloud-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            就业App原型/backend_api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 就业App原型/backend_api/requirements.txt
+
+      - name: Initialize database
+        working-directory: 就业App原型/backend_api
+        run: python init_db.py
+
+      - name: Run requests-only cloud sync
+        working-directory: 就业App原型/backend_api
+        env:
+          CLOUD_SYNC_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'qdhr,sdgxbys,ncss24365,jobmohrss' }}
+          VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
+          RETRY_ONCE_ON_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.retry_once_on_failure || 'true' }}
+        run: |
+          args=()
+          if [ -n "$CLOUD_SYNC_SOURCES" ]; then
+            args+=(--sources "$CLOUD_SYNC_SOURCES")
+          fi
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            args+=(--validate-startup)
+          fi
+          if python run_requests_only_cloud_sync.py "${args[@]}"; then
+            exit 0
+          fi
+
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            echo "Startup validation failed; skipping retry"
+            exit 1
+          fi
+
+          if [ "$RETRY_ONCE_ON_FAILURE" != "true" ]; then
+            echo "Retry disabled; failing after first attempt"
+            exit 1
+          fi
+
+          echo "First sync attempt failed; retrying once"
+          python run_requests_only_cloud_sync.py "${args[@]}"
+
+      - name: Commit updated database and summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 就业App原型/backend_api/data/jobs.db 就业App原型/backend_api/data/cloud_sync_last_result.json
+          if git diff --cached --quiet; then
+            echo "No database changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update requests-only sync data"
+          git push

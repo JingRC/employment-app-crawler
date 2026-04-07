@@ -1,0 +1,34 @@
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local secrets
+zhipin_secrets.json
+提交/zhipin_secrets.json
+
+# Local crawler debug artifacts
+_debug_*.json
+_fw_*.html
+_qlrc_*.html
+_rc*.html
+_rc*.js
+_rcsd_*.html
+diag_joblist_response.py
+
+# Generated exports
+joblist_*.csv
+joblist_*.json
+提交/joblist_*.csv
+提交/joblist_*.json
+
+# Runtime debug snapshots
+就业App原型/backend_api/data/debug_snapshots/
+
+# OS files
+.DS_Store
+Thumbs.db
