@@ -86,64 +86,65 @@ jobs:
           echo "First sync attempt failed; retrying once"
           python run_requests_only_cloud_sync.py "${args[@]}"
 
-    - name: Publish sync summary
-    if: always()
-    working-directory: 就业App原型/backend_api
-    run: |
-      python - <<'PY'
-      import json
-      from pathlib import Path
+      - name: Publish sync summary
+        if: always()
+        working-directory: 就业App原型/backend_api
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
 
-      summary_path = Path("data/cloud_sync_last_result.json")
-      if not summary_path.exists():
-        print("cloud_sync_last_result.json not found; skip summary publish")
-        raise SystemExit(0)
+          summary_path = Path("data/cloud_sync_last_result.json")
+          if not summary_path.exists():
+              print("cloud_sync_last_result.json not found; skip summary publish")
+              raise SystemExit(0)
 
-      data = json.loads(summary_path.read_text(encoding="utf-8"))
-      selected_sources = data.get("selected_sources") or []
-      results = data.get("results") or []
-      started_at = data.get("started_at") or "-"
-      finished_at = data.get("finished_at") or "-"
-      total_fetched = int(data.get("total_fetched") or 0)
-      total_new = int(data.get("total_new") or 0)
-      total_updated = int(data.get("total_updated") or 0)
-      validate_startup = bool(data.get("validate_startup"))
+          data = json.loads(summary_path.read_text(encoding="utf-8"))
+          selected_sources = data.get("selected_sources") or []
+          results = data.get("results") or []
+          started_at = data.get("started_at") or "-"
+          finished_at = data.get("finished_at") or "-"
+          total_fetched = int(data.get("total_fetched") or 0)
+          total_new = int(data.get("total_new") or 0)
+          total_updated = int(data.get("total_updated") or 0)
+          validate_startup = bool(data.get("validate_startup"))
 
-      lines = [
-        "# Requests-only Cloud Sync Summary",
-        "",
-        f"- validate_startup: {'true' if validate_startup else 'false'}",
-        f"- selected_sources: {', '.join(selected_sources) if selected_sources else 'none'}",
-        f"- started_at: {started_at}",
-        f"- finished_at: {finished_at}",
-        f"- total_fetched: {total_fetched}",
-        f"- total_new: {total_new}",
-        f"- total_updated: {total_updated}",
-        "",
-        "| source | status | fetched | new | updated | note |",
-        "| --- | --- | ---: | ---: | ---: | --- |",
-      ]
+          lines = [
+              "# Requests-only Cloud Sync Summary",
+              "",
+              f"- validate_startup: {'true' if validate_startup else 'false'}",
+              f"- selected_sources: {', '.join(selected_sources) if selected_sources else 'none'}",
+              f"- started_at: {started_at}",
+              f"- finished_at: {finished_at}",
+              f"- total_fetched: {total_fetched}",
+              f"- total_new: {total_new}",
+              f"- total_updated: {total_updated}",
+              "",
+              "| source | status | fetched | new | updated | note |",
+              "| --- | --- | ---: | ---: | ---: | --- |",
+          ]
 
-      if results:
-        for item in results:
-          source_code = str(item.get("source_code") or "-")
-          status = str(item.get("status") or "-")
-          fetched = int(item.get("total_fetched") or 0)
-          new_to_db = int(item.get("new_to_db") or 0)
-          updated_in_db = int(item.get("updated_in_db") or 0)
-          note = str(item.get("error") or item.get("details", {}).get("request_summary") or "")
-          note = note.replace("|", "/")
-          lines.append(f"| {source_code} | {status} | {fetched} | {new_to_db} | {updated_in_db} | {note} |")
-      else:
-        lines.append("| - | skipped | 0 | 0 | 0 | no sources executed |")
+          if results:
+              for item in results:
+                  source_code = str(item.get("source_code") or "-")
+                  status = str(item.get("status") or "-")
+                  fetched = int(item.get("total_fetched") or 0)
+                  new_to_db = int(item.get("new_to_db") or 0)
+                  updated_in_db = int(item.get("updated_in_db") or 0)
+                  note = str(item.get("error") or item.get("details", {}).get("request_summary") or "")
+                  note = note.replace("|", "/")
+                  lines.append(f"| {source_code} | {status} | {fetched} | {new_to_db} | {updated_in_db} | {note} |")
+          else:
+              lines.append("| - | skipped | 0 | 0 | 0 | no sources executed |")
 
-      summary_text = "\n".join(lines)
-      print(summary_text)
+          summary_text = "\n".join(lines)
+          print(summary_text)
 
-      github_step_summary = Path(__import__("os").environ.get("GITHUB_STEP_SUMMARY", ""))
-      if github_step_summary:
-        github_step_summary.write_text(summary_text + "\n", encoding="utf-8")
-      PY
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_file:
+              Path(summary_file).write_text(summary_text + "\n", encoding="utf-8")
+          PY
 
       - name: Commit updated database and summary
         run: |
