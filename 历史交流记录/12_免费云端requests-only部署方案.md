@@ -119,6 +119,15 @@ run_requests_only_cloud_sync.py 当前默认：
 
 真实抓取阶段默认会在首轮失败后自动重试一次，更适合应对免费 runner 上的临时网络抖动；如果后面你想做严格失败观测，也可以把 retry_once_on_failure 改成 false。
 
+现在每次 workflow 跑完后，Actions 页面还会自动生成一段摘要，直接显示：
+
+- 本次是否为启动验证
+- 本次执行了哪些来源
+- 总抓取量 / 新增量 / 更新量
+- 每个来源的 success 或 failed 状态
+
+后续你看运行结果时，优先看页面顶部 Summary，不需要先翻完整日志。
+
 第一次运行后，仓库里会自动出现或更新：
 
 - 就业App原型/backend_api/data/jobs.db
