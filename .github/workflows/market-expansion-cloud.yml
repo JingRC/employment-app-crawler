@@ -12,6 +12,10 @@ on:
         description: Optional cap for the first wave. Use 0 to run all batches.
         required: false
         default: '0'
+      priority_phases:
+        description: Comma-separated first-wave phase keys. Defaults to a CI-safe API phase.
+        required: false
+        default: 'guopin-public'
       run_followup_wave:
         description: Run the follow-up official and vertical-source expansion wave.
         required: false
@@ -142,11 +146,15 @@ jobs:
         working-directory: 就业App原型/backend_api
         env:
           PRIORITY_MAX_BATCHES: ${{ inputs.priority_max_batches }}
+          PRIORITY_PHASES: ${{ inputs.priority_phases }}
           CONTINUE_ON_ERROR: ${{ inputs.continue_on_error }}
           DRY_RUN: ${{ inputs.dry_run }}
           RETRY_ONCE_ON_FAILURE: ${{ inputs.retry_once_on_failure }}
         run: |
           args=(--base-url http://127.0.0.1:8000)
+          if [ -n "$PRIORITY_PHASES" ]; then
+            args+=(--phases "$PRIORITY_PHASES")
+          fi
           if [ -n "$PRIORITY_MAX_BATCHES" ] && [ "$PRIORITY_MAX_BATCHES" != "0" ]; then
             args+=(--max-batches "$PRIORITY_MAX_BATCHES")
           fi
