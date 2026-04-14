@@ -1,0 +1,35 @@
+{
+  "started_at": "2026-04-14T09:51:14",
+  "base_url": "http://127.0.0.1:8000",
+  "selected_phases": [
+    "zhilian-beijing-priority",
+    "zhilian-shanghai-priority",
+    "job51-general",
+    "liepin-mid-senior",
+    "shixiseng-campus",
+    "guopin-public"
+  ],
+  "start_batch": 1,
+  "total_plan_count": 70,
+  "batch_count": 1,
+  "results": [
+    {
+      "absolute_batch": 1,
+      "label": "智联北京高收益深挖 / 关键词组 1 / 城市组 1",
+      "phase_key": "zhilian-beijing-priority",
+      "status": "failed",
+      "attempts": 2,
+      "total_fetched": 0,
+      "new_to_db": 0,
+      "message": "增量更新失败：1 个来源执行失败",
+      "error": "智联招聘: \nThe browser connection fails.\nAddress: 127.0.0.1:9222\nTip: \n1, the user folder does not conflict with the open browser \n2, if no interface system, please add '--headless=new' startup parameter \n3, if the system is Linux, try adding '--no-sandbox' boot parameter \nThe port and user folder paths can be set using ChromiumOptions.\nVersion: 4.1.1.2"
+    }
+  ],
+  "dry_run": false,
+  "max_retries": 1,
+  "finished_at": "2026-04-14T09:52:29",
+  "completed": 0,
+  "failed": 1,
+  "total_fetched": 0,
+  "total_new": 0
+}
