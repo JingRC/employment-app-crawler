@@ -1,20 +1,15 @@
 {
   "base_url": "http://127.0.0.1:8000",
   "selected_phases": [
-    "zhilian-beijing-priority",
-    "zhilian-shanghai-priority",
-    "job51-general",
-    "liepin-mid-senior",
-    "shixiseng-campus",
     "guopin-public"
   ],
-  "total_plan_count": 70,
+  "total_plan_count": 9,
   "start_batch": 1,
   "next_batch": 2,
-  "completed": 0,
-  "failed": 1,
-  "total_fetched": 0,
-  "total_new": 0,
+  "completed": 1,
+  "failed": 0,
+  "total_fetched": 578,
+  "total_new": 552,
   "finished": true,
-  "updated_at": "2026-04-14T09:52:29"
+  "updated_at": "2026-04-14T09:59:39"
 }
