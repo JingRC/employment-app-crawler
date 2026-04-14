@@ -1,15 +1,23 @@
 {
   "base_url": "http://127.0.0.1:8000",
   "selected_phases": [
+    "zhilian-beijing-priority",
+    "zhilian-shanghai-priority",
+    "job51-general",
+    "liepin-mid-senior",
+    "shixiseng-campus",
     "guopin-public"
   ],
-  "total_plan_count": 9,
+  "total_plan_count": 70,
   "start_batch": 1,
-  "next_batch": 2,
-  "completed": 1,
+  "current_batch": 31,
+  "next_batch": 31,
+  "current_label": "猎聘中高端补样本 / 关键词组 1 / 城市组 2",
+  "current_attempt": 1,
+  "completed": 30,
   "failed": 0,
-  "total_fetched": 578,
-  "total_new": 552,
-  "finished": true,
-  "updated_at": "2026-04-14T09:59:39"
+  "total_fetched": 3781,
+  "total_new": 3459,
+  "finished": false,
+  "updated_at": "2026-04-14T13:37:41"
 }
