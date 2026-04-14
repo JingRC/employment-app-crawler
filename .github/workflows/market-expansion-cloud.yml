@@ -150,6 +150,8 @@ jobs:
           CONTINUE_ON_ERROR: ${{ inputs.continue_on_error }}
           DRY_RUN: ${{ inputs.dry_run }}
           RETRY_ONCE_ON_FAILURE: ${{ inputs.retry_once_on_failure }}
+          HEADLESS_BROWSER: '1'
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           args=(--base-url http://127.0.0.1:8000)
           if [ -n "$PRIORITY_PHASES" ]; then
@@ -180,6 +182,8 @@ jobs:
           CONTINUE_ON_ERROR: ${{ inputs.continue_on_error }}
           DRY_RUN: ${{ inputs.dry_run }}
           RETRY_ONCE_ON_FAILURE: ${{ inputs.retry_once_on_failure }}
+          HEADLESS_BROWSER: '1'
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           args=(--base-url http://127.0.0.1:8000)
           if [ -n "$FOLLOWUP_MAX_BATCHES" ] && [ "$FOLLOWUP_MAX_BATCHES" != "0" ]; then

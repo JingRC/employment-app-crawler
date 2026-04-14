@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import sqlite3
+import socket
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -79,6 +83,53 @@ def retry_delay(attempt: int) -> float:
     return RETRY_BACKOFF_SECONDS * attempt
 
 
+def is_ci_browser_runtime() -> bool:
+    for env_name in ("HEADLESS_BROWSER", "GITHUB_ACTIONS", "CI"):
+        value = str(os.getenv(env_name) or "").strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
+def resolve_browser_binary_from_env() -> str:
+    for env_name in ("CHROME_PATH", "GOOGLE_CHROME_BIN", "CHROMIUM_PATH"):
+        value = str(os.getenv(env_name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def reserve_local_debug_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        return int(sock.getsockname()[1])
+
+
+def ensure_chromium_debug_address(options: Any) -> str:
+    raw_address = str(getattr(options, "address", "") or getattr(options, "_address", "") or "").strip()
+    if raw_address and ":" in raw_address:
+        return raw_address
+    if raw_address.isdigit():
+        normalized = f"127.0.0.1:{raw_address}"
+        if hasattr(options, "set_address"):
+            options.set_address(normalized)
+        return normalized
+
+    port = reserve_local_debug_port()
+    if hasattr(options, "set_local_port"):
+        options.set_local_port(port)
+    elif hasattr(options, "set_address"):
+        options.set_address(f"127.0.0.1:{port}")
+    return str(getattr(options, "address", "") or getattr(options, "_address", "") or f"127.0.0.1:{port}")
+
+
+def cleanup_temp_browser_data_dir(path: str | None) -> None:
+    if not path:
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def ensure_db() -> None:
     DB_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -131,10 +182,25 @@ def build_browser_options() -> ChromiumOptions:
     if ChromiumOptions is None:
         raise RuntimeError("未安装 DrissionPage，无法执行前程无忧浏览器采集")
     options = ChromiumOptions()
+    if hasattr(options, "auto_port"):
+        options.auto_port(True)
+    browser_path = resolve_browser_binary_from_env()
+    if browser_path and hasattr(options, "set_browser_path"):
+        options.set_browser_path(browser_path)
+    temp_user_data_path = ""
+    if is_ci_browser_runtime():
+        if hasattr(options, "headless"):
+            options.headless(True)
+        temp_user_data_path = tempfile.mkdtemp(prefix="job51_ci_")
+        if hasattr(options, "set_user_data_path"):
+            options.set_user_data_path(temp_user_data_path)
+    ensure_chromium_debug_address(options)
     options.set_argument("--no-sandbox")
+    options.set_argument("--disable-dev-shm-usage")
     options.set_argument("--disable-blink-features=AutomationControlled")
     options.set_argument("--disable-gpu")
     options.set_argument("--window-size=1440,960")
+    setattr(options, "_copilot_temp_user_data_path", temp_user_data_path)
     return options
 
 
@@ -697,6 +763,7 @@ def run_incremental_update(
     job51_request_trace: list[dict[str, Any]] = []
 
     options = build_browser_options()
+    temp_user_data_path = str(getattr(options, "_copilot_temp_user_data_path", "") or "")
     page = ChromiumPage(options)
     try:
         emit_progress(progress_callback, "前程无忧采集启动，模式 browser_intercept_api")
@@ -942,6 +1009,7 @@ def run_incremental_update(
             page.quit()
         except Exception:
             pass
+        cleanup_temp_browser_data_dir(temp_user_data_path)
 
 
 if __name__ == "__main__":
