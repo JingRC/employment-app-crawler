@@ -1,0 +1,89 @@
+{
+  "started_at": "2026-04-21T00:42:50.675370+00:00",
+  "finished_at": "2026-04-21T00:42:50.803219+00:00",
+  "validate_startup": true,
+  "overall_status": "success",
+  "task_name": "高下架来源专项修复",
+  "auto_selected": true,
+  "selected_sources": [],
+  "group_selection": {
+    "group_offset": 0,
+    "group_limit": null,
+    "group_labels": []
+  },
+  "pending_source_snapshot": [
+    {
+      "source_code": "ncss24365",
+      "source_name": "24365 国家大学生就业服务平台",
+      "pending_count": 375,
+      "oldest_last_seen_at": "2026-04-07 01:35:15",
+      "latest_last_seen_at": "2026-04-09 08:18:33"
+    },
+    {
+      "source_code": "zhilian",
+      "source_name": "智联招聘",
+      "pending_count": 291,
+      "oldest_last_seen_at": "2026-03-29 06:15:21",
+      "latest_last_seen_at": "2026-04-04 01:32:38"
+    },
+    {
+      "source_code": "job51",
+      "source_name": "前程无忧",
+      "pending_count": 159,
+      "oldest_last_seen_at": "2026-03-29 06:58:20",
+      "latest_last_seen_at": "2026-04-04 01:38:08"
+    }
+  ],
+  "total_fetched": 0,
+  "total_new": 0,
+  "total_updated": 0,
+  "total_verified": 0,
+  "total_restored": 0,
+  "total_confirmed": 0,
+  "total_review": 0,
+  "total_missing_url": 0,
+  "results": [],
+  "analytics_warmup": {
+    "items": [
+      {
+        "status": "success",
+        "top_n": 12,
+        "focus_source_code": null,
+        "total_jobs": 559,
+        "total_cities": 31,
+        "total_companies": 194
+      },
+      {
+        "status": "success",
+        "top_n": 12,
+        "focus_source_code": "job51",
+        "total_jobs": 559,
+        "total_cities": 31,
+        "total_companies": 194
+      },
+      {
+        "status": "success",
+        "top_n": 12,
+        "focus_source_code": "ncss24365",
+        "total_jobs": 559,
+        "total_cities": 31,
+        "total_companies": 194
+      },
+      {
+        "status": "success",
+        "top_n": 12,
+        "focus_source_code": "zhilian",
+        "total_jobs": 559,
+        "total_cities": 31,
+        "total_companies": 194
+      }
+    ],
+    "success_count": 4,
+    "failed_count": 0
+  },
+  "notes": [
+    "该链路专门针对 pending inactive 体量较大的来源做专项回补，不覆盖默认 requests/browser 日更摘要。",
+    "每个来源抓取完成后会立即按 source_code 批量强校验 pending inactive，避免全局 oldest 策略长期轮不到下架大户。",
+    "当前默认候选来源为 job51、ncss24365、zhilian；未显式传 --sources 时，会优先按 pending inactive 数量自动挑选。"
+  ]
+}
