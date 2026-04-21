@@ -6,7 +6,7 @@ on:
       sources:
         description: Comma-separated source codes. Use none to skip all sources.
         required: false
-        default: qdhr,sdgxbys,ncss24365,jobmohrss
+        default: qdhr,sdgxbys,ncss24365,jobmohrss,healthr,buildhr,chenhr
       validate_startup:
         description: Only validate startup, database initialization, and summary writing.
         required: false
@@ -24,7 +24,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: requests-only-cloud-sync
+  group: cloud-maintenance-db-write
   cancel-in-progress: false
 
 jobs:
@@ -58,7 +58,7 @@ jobs:
       - name: Run requests-only cloud sync
         working-directory: 就业App原型/backend_api
         env:
-          CLOUD_SYNC_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'qdhr,sdgxbys,ncss24365,jobmohrss' }}
+          CLOUD_SYNC_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'qdhr,sdgxbys,ncss24365,jobmohrss,healthr,buildhr,chenhr' }}
           VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
           RETRY_ONCE_ON_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.retry_once_on_failure || 'true' }}
         run: |
@@ -135,6 +135,32 @@ jobs:
                   note = str(item.get("error") or item.get("details", {}).get("request_summary") or "")
                   note = note.replace("|", "/")
                   lines.append(f"| {source_code} | {status} | {fetched} | {new_to_db} | {updated_in_db} | {note} |")
+
+                  sub_runs = item.get("details", {}).get("sub_runs") or []
+                  active_sub_runs = []
+                  for sub_run in sub_runs:
+                      run_fetched = int(sub_run.get("total_fetched") or 0)
+                      run_new = int(sub_run.get("new_to_db") or 0)
+                      run_updated = int(sub_run.get("updated") or sub_run.get("updated_in_db") or 0)
+                      if run_fetched > 0 or run_new > 0 or run_updated > 0:
+                          active_sub_runs.append(sub_run)
+
+                  if active_sub_runs:
+                      lines.append("")
+                      lines.append(f"#### {source_code} active sub-runs")
+                      lines.append("")
+                      lines.append("| run | queries | cities | fetched | new | updated | note |")
+                      lines.append("| --- | --- | --- | ---: | ---: | ---: | --- |")
+                      for sub_run in active_sub_runs:
+                          run_label = str(sub_run.get("run_label") or "-")
+                          run_queries = ", ".join(str(value) for value in (sub_run.get("run_queries") or [])) or "-"
+                          run_cities = ", ".join(str(value) for value in (sub_run.get("run_cities") or [])) or "-"
+                          run_fetched = int(sub_run.get("total_fetched") or 0)
+                          run_new = int(sub_run.get("new_to_db") or 0)
+                          run_updated = int(sub_run.get("updated") or sub_run.get("updated_in_db") or 0)
+                          run_note = str(sub_run.get("request_summary") or sub_run.get("error") or "")
+                          run_note = run_note.replace("|", "/")
+                          lines.append(f"| {run_label} | {run_queries} | {run_cities} | {run_fetched} | {run_new} | {run_updated} | {run_note} |")
           else:
               lines.append("| - | skipped | 0 | 0 | 0 | no sources executed |")
 

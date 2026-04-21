@@ -24,7 +24,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: weak-sources-weekly-repair
+  group: cloud-maintenance-db-write
   cancel-in-progress: false
 
 jobs:

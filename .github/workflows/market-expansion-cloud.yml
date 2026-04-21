@@ -58,7 +58,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: market-expansion-cloud
+  group: cloud-maintenance-db-write
   cancel-in-progress: false
 
 jobs:
@@ -97,6 +97,11 @@ jobs:
       - name: Initialize database
         working-directory: 就业App原型/backend_api
         run: python init_db.py
+
+      - name: Create ASCII backend API alias
+        run: |
+          rm -rf /tmp/backend_api
+          ln -s "$GITHUB_WORKSPACE/就业App原型/backend_api" /tmp/backend_api
 
       - name: Start backend API for market expansion
         if: ${{ inputs.run_priority_wave || inputs.run_followup_wave }}
@@ -205,11 +210,13 @@ jobs:
 
       - name: Run high inactive source repair after expansion
         if: ${{ inputs.run_high_inactive_repair }}
-        working-directory: 就业App原型/backend_api
+        working-directory: /tmp/backend_api
         env:
           HIGH_INACTIVE_SOURCES: ${{ inputs.high_inactive_sources }}
           HIGH_INACTIVE_AUTO_SELECT_COUNT: ${{ inputs.high_inactive_auto_select_count }}
           DRY_RUN: ${{ inputs.dry_run }}
+          HEADLESS_BROWSER: '1'
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           args=()
           if [ -n "$HIGH_INACTIVE_SOURCES" ]; then
@@ -310,4 +317,10 @@ jobs:
             exit 0
           fi
           git commit -m "chore: update market expansion cloud maintenance data"
+          if git push; then
+            exit 0
+          fi
+          echo "Initial push failed; rebasing onto latest origin/main and retrying once"
+          git fetch origin main
+          git rebase origin/main
           git push
