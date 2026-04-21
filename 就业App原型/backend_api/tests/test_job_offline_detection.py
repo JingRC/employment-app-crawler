@@ -88,43 +88,46 @@ class JobOfflineDetectionTests(unittest.TestCase):
                 self.assertEqual(str(stale_row["status"]), "inactive")
                 self.assertEqual(str(fresh_row["status"]), "active")
 
-                result = database.list_jobs(
-                    keyword=None,
-                    city_name="北京",
-                    internship_only=False,
-                    source_code="boss",
-                    status="active",
-                    salary_min_k=None,
-                    salary_max_k=None,
-                    degree_text=None,
-                    experience_text=None,
-                    sort_by="latest",
-                    page=1,
-                    page_size=20,
-                )
-                self.assertEqual(result["total"], 1)
-                self.assertEqual(result["items"][0]["title"], "新鲜岗位")
-                self.assertEqual(result["items"][0]["status"], "active")
+                with patch.object(database, "mark_stale_jobs_inactive", return_value={"inactive_marked": 0}) as mark_stale_mock:
+                    result = database.list_jobs(
+                        keyword=None,
+                        city_name="北京",
+                        internship_only=False,
+                        source_code="boss",
+                        status="active",
+                        salary_min_k=None,
+                        salary_max_k=None,
+                        degree_text=None,
+                        experience_text=None,
+                        sort_by="latest",
+                        page=1,
+                        page_size=20,
+                    )
+                    self.assertEqual(result["total"], 1)
+                    self.assertEqual(result["items"][0]["title"], "新鲜岗位")
+                    self.assertEqual(result["items"][0]["status"], "active")
 
-                offline_result = database.list_jobs(
-                    keyword=None,
-                    city_name="北京",
-                    internship_only=False,
-                    source_code="boss",
-                    status="inactive",
-                    salary_min_k=None,
-                    salary_max_k=None,
-                    degree_text=None,
-                    experience_text=None,
-                    sort_by="latest",
-                    page=1,
-                    page_size=20,
-                )
-                self.assertEqual(offline_result["total"], 1)
-                self.assertEqual(offline_result["items"][0]["title"], "过期岗位")
-                self.assertEqual(offline_result["items"][0]["status"], "inactive")
+                    offline_result = database.list_jobs(
+                        keyword=None,
+                        city_name="北京",
+                        internship_only=False,
+                        source_code="boss",
+                        status="inactive",
+                        salary_min_k=None,
+                        salary_max_k=None,
+                        degree_text=None,
+                        experience_text=None,
+                        sort_by="latest",
+                        page=1,
+                        page_size=20,
+                    )
+                    self.assertEqual(offline_result["total"], 1)
+                    self.assertEqual(offline_result["items"][0]["title"], "过期岗位")
+                    self.assertEqual(offline_result["items"][0]["status"], "inactive")
 
-                offline_filters = database.list_job_filter_options(status="inactive")
+                    offline_filters = database.list_job_filter_options(status="inactive")
+                    mark_stale_mock.assert_not_called()
+
                 self.assertEqual(offline_filters["cities"][0]["city_name"], "北京")
                 self.assertEqual(offline_filters["sources"][0]["source_code"], "boss")
         finally:

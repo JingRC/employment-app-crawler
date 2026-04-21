@@ -60,7 +60,12 @@ def query_job_market_analytics(
     top_n: int = 12,
     focus_source_code: str | None = None,
 ) -> dict:
-    return get_job_market_analytics(status=status, top_n=top_n, focus_source_code=focus_source_code)
+    return get_job_market_analytics(
+        status=status,
+        top_n=top_n,
+        focus_source_code=focus_source_code,
+        refresh_stale=False,
+    )
 
 
 def query_job_detail(job_id: int) -> dict | None:

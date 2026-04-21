@@ -16,6 +16,19 @@ from app.services import job_service  # noqa: E402
 
 
 class JobServiceActionTests(unittest.TestCase):
+    def test_query_job_market_analytics_disables_stale_refresh_on_read(self) -> None:
+        fake_result = {"overview": {"total_jobs": 12}}
+        with patch.object(job_service, "get_job_market_analytics", return_value=fake_result) as analytics_mock:
+            result = job_service.query_job_market_analytics(status="active", top_n=8, focus_source_code="qdhr")
+
+        analytics_mock.assert_called_once_with(
+            status="active",
+            top_n=8,
+            focus_source_code="qdhr",
+            refresh_stale=False,
+        )
+        self.assertEqual(result, fake_result)
+
     def test_manually_verify_job_creates_notification(self) -> None:
         detail = {
             "job_id": 7,

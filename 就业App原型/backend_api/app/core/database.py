@@ -746,8 +746,10 @@ def list_jobs(
     page: int,
     page_size: int,
     offline_verification_status: str | None = None,
+    refresh_stale: bool = False,
 ) -> dict[str, Any]:
-    mark_stale_jobs_inactive()
+    if refresh_stale:
+        mark_stale_jobs_inactive()
 
     normalized_status = (status or "active").strip().lower() or "active"
     if normalized_status not in {"active", "inactive", "all"}:
@@ -878,8 +880,10 @@ def list_jobs(
 def list_job_filter_options(
     status: str | None = "active",
     offline_verification_status: str | None = None,
+    refresh_stale: bool = False,
 ) -> dict[str, Any]:
-    mark_stale_jobs_inactive()
+    if refresh_stale:
+        mark_stale_jobs_inactive()
 
     normalized_status = (status or "active").strip().lower() or "active"
     if normalized_status not in {"active", "inactive", "all"}:
