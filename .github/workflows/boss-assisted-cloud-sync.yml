@@ -1,0 +1,154 @@
+name: boss-assisted-cloud-sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      queries:
+        description: Optional Boss queries.
+        required: false
+        default: Java,Python,前端,测试
+      cities:
+        description: Optional Boss cities.
+        required: false
+        default: 北京,上海,青岛,济南,杭州,深圳
+      validate_startup:
+        description: Only validate startup, database initialization, and summary writing.
+        required: false
+        type: boolean
+        default: false
+      retry_once_on_failure:
+        description: Retry the sync command once if the first attempt fails.
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: '50 3 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-maintenance-db-write
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            就业App原型/backend_api/requirements.txt
+
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 就业App原型/backend_api/requirements.txt
+
+      - name: Initialize database
+        working-directory: 就业App原型/backend_api
+        run: python init_db.py
+
+      - name: Create ASCII backend API alias
+        run: |
+          rm -rf /tmp/backend_api
+          ln -s "$GITHUB_WORKSPACE/就业App原型/backend_api" /tmp/backend_api
+
+      - name: Run isolated Boss assisted cloud sync
+        working-directory: /tmp/backend_api
+        env:
+          BOSS_QUERIES: ${{ github.event_name == 'workflow_dispatch' && inputs.queries || 'Java,Python,前端,测试' }}
+          BOSS_CITIES: ${{ github.event_name == 'workflow_dispatch' && inputs.cities || '北京,上海,青岛,济南,杭州,深圳' }}
+          VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
+          RETRY_ONCE_ON_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.retry_once_on_failure || 'true' }}
+        run: |
+          args=()
+          if [ -n "$BOSS_QUERIES" ]; then
+            args+=(--queries "$BOSS_QUERIES")
+          fi
+          if [ -n "$BOSS_CITIES" ]; then
+            args+=(--cities "$BOSS_CITIES")
+          fi
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            args+=(--validate-startup)
+          fi
+          if xvfb-run -a python run_boss_assisted_cloud_sync.py "${args[@]}"; then
+            exit 0
+          fi
+          if [ "$VALIDATE_STARTUP" = "true" ] || [ "$RETRY_ONCE_ON_FAILURE" != "true" ]; then
+            exit 1
+          fi
+          xvfb-run -a python run_boss_assisted_cloud_sync.py "${args[@]}"
+
+      - name: Publish sync summary
+        if: always()
+        working-directory: 就业App原型/backend_api
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path('data/boss_assisted_cloud_sync_last_result.json')
+          if not summary_path.exists():
+              print('boss_assisted_cloud_sync_last_result.json not found; skip summary publish')
+              raise SystemExit(0)
+
+          data = json.loads(summary_path.read_text(encoding='utf-8'))
+          results = list(data.get('results') or [])
+          lines = [
+              '# Boss Assisted Cloud Sync Summary',
+              '',
+              f"- overall_status: {data.get('overall_status') or '-'}",
+              f"- finished_at: {data.get('finished_at') or '-'}",
+              f"- total_fetched: {int(data.get('total_fetched') or 0)}",
+              f"- total_new: {int(data.get('total_new') or 0)}",
+              f"- total_updated: {int(data.get('total_updated') or 0)}",
+              f"- selected_queries: {', '.join(data.get('selected_queries') or []) or 'none'}",
+              f"- selected_cities: {', '.join(data.get('selected_cities') or []) or 'none'}",
+              '',
+              '| source | status | fetched | new | updated |',
+              '| --- | --- | ---: | ---: | ---: |',
+          ]
+          if not results:
+              lines.append('| - | skipped | 0 | 0 | 0 |')
+          for item in results:
+              lines.append(
+                  f"| {item.get('source_code') or '-'} | {item.get('status') or '-'} | {int(item.get('total_fetched') or 0)} | {int(item.get('new_to_db') or 0)} | {int(item.get('updated_in_db') or 0)} |"
+              )
+          text = '\n'.join(lines)
+          print(text)
+          summary_file = os.environ.get('GITHUB_STEP_SUMMARY', '')
+          if summary_file:
+              Path(summary_file).write_text(text + '\n', encoding='utf-8')
+          PY
+
+      - name: Commit updated database and summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 就业App原型/backend_api/data/jobs.db 就业App原型/backend_api/data/boss_assisted_cloud_sync_last_result.json
+          if git diff --cached --quiet; then
+            echo "No database changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update boss assisted sync data"
+          git push

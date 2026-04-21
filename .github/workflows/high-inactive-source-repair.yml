@@ -1,0 +1,168 @@
+name: high-inactive-source-repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: Optional comma-separated source codes. Leave empty to auto-select by pending inactive volume.
+        required: false
+        default: ''
+      auto_select_count:
+        description: Auto-select this many high inactive sources when sources is empty.
+        required: false
+        default: '3'
+      validate_startup:
+        description: Only validate startup, summary writing, and analytics warmup.
+        required: false
+        type: boolean
+        default: false
+      retry_once_on_failure:
+        description: Retry the repair command once if the first attempt fails.
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: '20 5 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-maintenance-db-write
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            就业App原型/backend_api/requirements.txt
+
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 就业App原型/backend_api/requirements.txt
+
+      - name: Initialize database
+        working-directory: 就业App原型/backend_api
+        run: python init_db.py
+
+      - name: Create ASCII backend API alias
+        run: |
+          rm -rf /tmp/backend_api
+          ln -s "$GITHUB_WORKSPACE/就业App原型/backend_api" /tmp/backend_api
+
+      - name: Run high inactive source repair
+        working-directory: /tmp/backend_api
+        env:
+          HIGH_INACTIVE_REPAIR_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || '' }}
+          AUTO_SELECT_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.auto_select_count || '3' }}
+          VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
+          RETRY_ONCE_ON_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.retry_once_on_failure || 'true' }}
+        run: |
+          args=()
+          if [ -n "$HIGH_INACTIVE_REPAIR_SOURCES" ]; then
+            args+=(--sources "$HIGH_INACTIVE_REPAIR_SOURCES")
+          fi
+          if [ -n "$AUTO_SELECT_COUNT" ]; then
+            args+=(--auto-select-count "$AUTO_SELECT_COUNT")
+          fi
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            args+=(--validate-startup)
+          fi
+          if xvfb-run -a python run_high_inactive_source_repair.py "${args[@]}"; then
+            exit 0
+          fi
+          if [ "$VALIDATE_STARTUP" = "true" ] || [ "$RETRY_ONCE_ON_FAILURE" != "true" ]; then
+            exit 1
+          fi
+          xvfb-run -a python run_high_inactive_source_repair.py "${args[@]}"
+
+      - name: Publish repair summary
+        if: always()
+        working-directory: 就业App原型/backend_api
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path('data/high_inactive_source_repair_last_result.json')
+          if not summary_path.exists():
+              print('high_inactive_source_repair_last_result.json not found; skip summary publish')
+              raise SystemExit(0)
+
+          data = json.loads(summary_path.read_text(encoding='utf-8'))
+          results = list(data.get('results') or [])
+          analytics_warmup = dict(data.get('analytics_warmup') or {})
+          lines = [
+              '# High Inactive Source Repair Summary',
+              '',
+              f"- overall_status: {data.get('overall_status') or '-'}",
+              f"- validate_startup: {'true' if data.get('validate_startup') else 'false'}",
+              f"- auto_selected: {'true' if data.get('auto_selected') else 'false'}",
+              f"- selected_sources: {', '.join(data.get('selected_sources') or []) or 'none'}",
+              f"- finished_at: {data.get('finished_at') or '-'}",
+              f"- total_fetched: {int(data.get('total_fetched') or 0)}",
+              f"- total_new: {int(data.get('total_new') or 0)}",
+              f"- total_updated: {int(data.get('total_updated') or 0)}",
+              f"- total_verified: {int(data.get('total_verified') or 0)}",
+              f"- total_restored: {int(data.get('total_restored') or 0)}",
+              f"- total_confirmed: {int(data.get('total_confirmed') or 0)}",
+              f"- total_review: {int(data.get('total_review') or 0)}",
+              f"- total_missing_url: {int(data.get('total_missing_url') or 0)}",
+              f"- analytics_warmup_success: {int(analytics_warmup.get('success_count') or 0)}",
+              f"- analytics_warmup_failed: {int(analytics_warmup.get('failed_count') or 0)}",
+              '',
+              '| source | stage | status | fetched | new | updated | verified | restored | confirmed | note |',
+              '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
+          ]
+          if not results:
+              lines.append('| - | - | skipped | 0 | 0 | 0 | 0 | 0 | 0 | 启动验证或未选择来源 |')
+          for item in results:
+              lines.append(
+                  f"| {item.get('source_code') or '-'} | {item.get('stage_code') or '-'} | {item.get('status') or '-'} | {int(item.get('total_fetched') or 0)} | {int(item.get('new_to_db') or 0)} | {int(item.get('updated_in_db') or 0)} | {int(item.get('verified_count') or 0)} | {int(item.get('restored_count') or 0)} | {int(item.get('confirmed_count') or 0)} | {str(item.get('error') or item.get('note') or '').replace('|', '/')} |"
+              )
+          text = '\n'.join(lines)
+          print(text)
+          summary_file = os.environ.get('GITHUB_STEP_SUMMARY', '')
+          if summary_file:
+              Path(summary_file).write_text(text + '\n', encoding='utf-8')
+          PY
+
+      - name: Commit updated database and repair summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            就业App原型/backend_api/data/jobs.db \
+            就业App原型/backend_api/data/high_inactive_source_repair_last_result.json
+          if [ -d "就业App原型/backend_api/data/cache" ]; then
+            git add 就业App原型/backend_api/data/cache
+          fi
+          if git diff --cached --quiet; then
+            echo "No high inactive repair changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update high inactive source repair data"
+          git push

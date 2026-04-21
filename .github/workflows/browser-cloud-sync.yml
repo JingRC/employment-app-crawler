@@ -1,0 +1,198 @@
+name: browser-cloud-sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: Comma-separated source codes. Use none to skip all sources.
+        required: false
+        default: zhilian,job51,liepin,shixiseng,guopin
+      validate_startup:
+        description: Only validate startup, database initialization, and summary writing.
+        required: false
+        type: boolean
+        default: false
+      retry_once_on_failure:
+        description: Retry the sync command once if the first attempt fails.
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: '25 2,14 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-maintenance-db-write
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            就业App原型/backend_api/requirements.txt
+
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 就业App原型/backend_api/requirements.txt
+
+      - name: Initialize database
+        working-directory: 就业App原型/backend_api
+        run: python init_db.py
+
+      - name: Create ASCII backend API alias
+        run: |
+          rm -rf /tmp/backend_api
+          ln -s "$GITHUB_WORKSPACE/就业App原型/backend_api" /tmp/backend_api
+
+      - name: Run browser/API cloud sync
+        working-directory: /tmp/backend_api
+        env:
+          BROWSER_CLOUD_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'zhilian,job51,liepin,shixiseng,guopin' }}
+          VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
+          RETRY_ONCE_ON_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.retry_once_on_failure || 'true' }}
+        run: |
+          args=()
+          if [ -n "$BROWSER_CLOUD_SOURCES" ]; then
+            args+=(--sources "$BROWSER_CLOUD_SOURCES")
+          fi
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            args+=(--validate-startup)
+          fi
+
+          if xvfb-run -a python run_browser_cloud_sync.py "${args[@]}"; then
+            exit 0
+          fi
+
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            echo "Startup validation failed; skipping retry"
+            exit 1
+          fi
+
+          if [ "$RETRY_ONCE_ON_FAILURE" != "true" ]; then
+            echo "Retry disabled; failing after first attempt"
+            exit 1
+          fi
+
+          echo "First browser sync attempt failed; retrying once"
+          xvfb-run -a python run_browser_cloud_sync.py "${args[@]}"
+
+      - name: Publish sync summary
+        if: always()
+        working-directory: 就业App原型/backend_api
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path("data/browser_cloud_sync_last_result.json")
+          if not summary_path.exists():
+              print("browser_cloud_sync_last_result.json not found; skip summary publish")
+              raise SystemExit(0)
+
+          data = json.loads(summary_path.read_text(encoding="utf-8"))
+          selected_sources = data.get("selected_sources") or []
+          results = data.get("results") or []
+          started_at = data.get("started_at") or "-"
+          finished_at = data.get("finished_at") or "-"
+          total_fetched = int(data.get("total_fetched") or 0)
+          total_new = int(data.get("total_new") or 0)
+          total_updated = int(data.get("total_updated") or 0)
+          validate_startup = bool(data.get("validate_startup"))
+
+          lines = [
+              "# Browser/API Cloud Sync Summary",
+              "",
+              f"- validate_startup: {'true' if validate_startup else 'false'}",
+              f"- selected_sources: {', '.join(selected_sources) if selected_sources else 'none'}",
+              f"- started_at: {started_at}",
+              f"- finished_at: {finished_at}",
+              f"- total_fetched: {total_fetched}",
+              f"- total_new: {total_new}",
+              f"- total_updated: {total_updated}",
+              "",
+              "| source | status | fetched | new | updated | note |",
+              "| --- | --- | ---: | ---: | ---: | --- |",
+          ]
+
+          if results:
+              for item in results:
+                  source_code = str(item.get("source_code") or "-")
+                  status = str(item.get("status") or "-")
+                  fetched = int(item.get("total_fetched") or 0)
+                  new_to_db = int(item.get("new_to_db") or 0)
+                  updated_in_db = int(item.get("updated_in_db") or 0)
+                  note = str(item.get("error") or "")
+                  note = note.replace("|", "/")
+                  lines.append(f"| {source_code} | {status} | {fetched} | {new_to_db} | {updated_in_db} | {note} |")
+
+                  sub_runs = item.get("details", {}).get("sub_runs") or []
+                  active_sub_runs = []
+                  for sub_run in sub_runs:
+                      run_fetched = int(sub_run.get("total_fetched") or 0)
+                      run_new = int(sub_run.get("new_to_db") or 0)
+                      run_updated = int(sub_run.get("updated") or sub_run.get("updated_in_db") or 0)
+                      if run_fetched > 0 or run_new > 0 or run_updated > 0:
+                          active_sub_runs.append(sub_run)
+
+                  if active_sub_runs:
+                      lines.append("")
+                      lines.append(f"#### {source_code} active sub-runs")
+                      lines.append("")
+                      lines.append("| run | runtime | queries | cities | fetched | new | updated |")
+                      lines.append("| --- | --- | --- | --- | ---: | ---: | ---: |")
+                      for sub_run in active_sub_runs:
+                          run_label = str(sub_run.get("run_label") or "-")
+                          run_runtime_mode = str(sub_run.get("run_runtime_mode") or "-")
+                          run_queries = ", ".join(str(value) for value in (sub_run.get("run_queries") or [])) or "-"
+                          run_cities = ", ".join(str(value) for value in (sub_run.get("run_cities") or [])) or "-"
+                          run_fetched = int(sub_run.get("total_fetched") or 0)
+                          run_new = int(sub_run.get("new_to_db") or 0)
+                          run_updated = int(sub_run.get("updated") or sub_run.get("updated_in_db") or 0)
+                          lines.append(f"| {run_label} | {run_runtime_mode} | {run_queries} | {run_cities} | {run_fetched} | {run_new} | {run_updated} |")
+          else:
+              lines.append("| - | skipped | 0 | 0 | 0 | no sources executed |")
+
+          summary_text = "\n".join(lines)
+          print(summary_text)
+
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_file:
+              Path(summary_file).write_text(summary_text + "\n", encoding="utf-8")
+          PY
+
+      - name: Commit updated database and summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 就业App原型/backend_api/data/jobs.db 就业App原型/backend_api/data/browser_cloud_sync_last_result.json
+          if git diff --cached --quiet; then
+            echo "No database changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update browser cloud sync data"
+          git push
