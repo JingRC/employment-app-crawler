@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from fastapi import Body
 
-from app.schemas.job import JobAnalyticsData, JobBatchActionRequest, JobBatchActionResult, JobDetail, JobFilterData, JobListData
-from app.services.job_service import batch_restore_jobs, batch_verify_jobs, manually_restore_job, manually_verify_job, query_job_detail, query_job_filter_options, query_job_market_analytics, query_jobs
+from app.schemas.job import JobAnalyticsData, JobBatchActionRequest, JobBatchActionResult, JobCloudSyncDashboard, JobDetail, JobFilterData, JobListData
+from app.services.job_service import batch_restore_jobs, batch_verify_jobs, manually_restore_job, manually_verify_job, query_cloud_sync_dashboard, query_job_detail, query_job_filter_options, query_job_market_analytics, query_jobs
 
 router = APIRouter()
 
@@ -59,6 +59,12 @@ def get_job_analytics(
     focus_source_code: str | None = Query(default=None),
 ) -> dict:
     data = JobAnalyticsData(**query_job_market_analytics(status=status, top_n=top_n, focus_source_code=focus_source_code))
+    return {"code": 0, "message": "success", "data": data.model_dump()}
+
+
+@router.get("/cloud-sync-status")
+def get_cloud_sync_status() -> dict:
+    data = JobCloudSyncDashboard(**query_cloud_sync_dashboard())
     return {"code": 0, "message": "success", "data": data.model_dump()}
 
 

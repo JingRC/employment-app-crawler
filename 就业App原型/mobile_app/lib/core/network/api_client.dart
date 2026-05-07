@@ -5,10 +5,13 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../shared/models/favorite_company.dart';
+import '../../shared/models/favorite_job.dart';
 import '../../shared/models/job_detail.dart';
-import '../../shared/models/job_item.dart';
 import '../../shared/models/job_list_result.dart';
+import '../../shared/models/job_timeline_result.dart';
 import '../../shared/models/notification_item.dart';
+import '../../shared/models/notification_stats.dart';
+import '../../shared/models/saved_search_item.dart';
 
 class ApiClient {
   ApiClient({http.Client? client}) : _client = client ?? http.Client();
@@ -47,12 +50,35 @@ class ApiClient {
     return JobDetail.fromJson((data['data'] as Map<String, dynamic>));
   }
 
+  Future<void> favoriteJob({required int jobId}) async {
+    final response = await _client.post(
+      Uri.parse('$_baseUrl/favorites/jobs'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode(<String, dynamic>{'job_id': jobId}),
+    );
+    _decodeResponse(response);
+  }
+
   Future<List<FavoriteCompany>> fetchFavoriteCompanies() async {
     final response = await _client.get(Uri.parse('$_baseUrl/favorites/companies'));
     final data = _decodeResponse(response);
     final items = (data['data']['items'] as List<dynamic>? ?? <dynamic>[])
         .cast<Map<String, dynamic>>();
     return items.map(FavoriteCompany.fromJson).toList();
+  }
+
+  Future<List<FavoriteJob>> fetchFavoriteJobs() async {
+    final response = await _client.get(Uri.parse('$_baseUrl/favorites/jobs'));
+    final data = _decodeResponse(response);
+    final items = (data['data']['items'] as List<dynamic>? ?? <dynamic>[])
+        .cast<Map<String, dynamic>>();
+    return items.map(FavoriteJob.fromJson).toList();
+  }
+
+  Future<bool> unfavoriteJob(int jobId) async {
+    final response = await _client.delete(Uri.parse('$_baseUrl/favorites/jobs/$jobId'));
+    final data = _decodeResponse(response);
+    return (data['data'] ?? false) as bool;
   }
 
   Future<FavoriteCompany> favoriteCompany({
@@ -79,6 +105,83 @@ class ApiClient {
     final items = (data['data']['items'] as List<dynamic>? ?? <dynamic>[])
         .cast<Map<String, dynamic>>();
     return items.map(NotificationItem.fromJson).toList();
+  }
+
+  Future<List<SavedSearchItem>> fetchSavedSearches() async {
+    final response = await _client.get(Uri.parse('$_baseUrl/saved-searches'));
+    final data = _decodeResponse(response);
+    final items = (data['data']['items'] as List<dynamic>? ?? <dynamic>[])
+        .cast<Map<String, dynamic>>();
+    return items.map(SavedSearchItem.fromJson).toList();
+  }
+
+  Future<SavedSearchItem> createSavedSearch({
+    required String keyword,
+    required String cityName,
+    Map<String, dynamic> filters = const <String, dynamic>{},
+    bool enabled = true,
+    String notifyFrequency = 'daily',
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$_baseUrl/saved-searches'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode(<String, dynamic>{
+        'keyword': keyword,
+        'city_name': cityName,
+        'filters': filters,
+        'enabled': enabled,
+        'notify_frequency': notifyFrequency,
+      }),
+    );
+    final data = _decodeResponse(response);
+    return SavedSearchItem.fromJson(data['data'] as Map<String, dynamic>);
+  }
+
+  Future<SavedSearchItem> updateSavedSearch({
+    required int searchId,
+    bool? enabled,
+  }) async {
+    final response = await _client.patch(
+      Uri.parse('$_baseUrl/saved-searches/$searchId'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode(<String, dynamic>{
+        if (enabled != null) 'enabled': enabled,
+      }),
+    );
+    final data = _decodeResponse(response);
+    return SavedSearchItem.fromJson(data['data'] as Map<String, dynamic>);
+  }
+
+  Future<bool> deleteSavedSearch(int searchId) async {
+    final response = await _client.delete(Uri.parse('$_baseUrl/saved-searches/$searchId'));
+    final data = _decodeResponse(response);
+    return (data['data'] ?? false) as bool;
+  }
+
+  Future<NotificationStats> fetchNotificationStats() async {
+    final response = await _client.get(Uri.parse('$_baseUrl/notifications/stats'));
+    final data = _decodeResponse(response);
+    return NotificationStats.fromJson(data['data'] as Map<String, dynamic>);
+  }
+
+  Future<int> markAllNotificationsRead() async {
+    final response = await _client.post(Uri.parse('$_baseUrl/notifications/read-all'));
+    final data = _decodeResponse(response);
+    return (data['data']['affected'] ?? 0) as int;
+  }
+
+  Future<bool> markNotificationRead(int notificationId) async {
+    final response = await _client.post(Uri.parse('$_baseUrl/notifications/$notificationId/read'));
+    final data = _decodeResponse(response);
+    return (data['data'] ?? false) as bool;
+  }
+
+  Future<JobTimelineResult> fetchJobTimeline(int jobId, {int limit = 10}) async {
+    final response = await _client.get(
+      Uri.parse('$_baseUrl/notifications/jobs/$jobId?limit=$limit'),
+    );
+    final data = _decodeResponse(response);
+    return JobTimelineResult.fromJson(data['data'] as Map<String, dynamic>);
   }
 
   Map<String, dynamic> _decodeResponse(http.Response response) {

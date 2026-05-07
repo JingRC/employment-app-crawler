@@ -47,7 +47,7 @@ class BossCookiePrepareRequest(BaseModel):
     query: str = "Java"
     city: str = "101010100"
     runtime_mode: str = "requests_only"
-    browser_preference: str = "edge"
+    browser_preference: str = "chrome"
     browser_profile: str = "Default"
     login_wait_seconds: int = 40
 
@@ -64,7 +64,7 @@ class BossCookiePrepareResult(BaseModel):
     query: str = ""
     city: str = ""
     runtime_mode: str = "requests_only"
-    browser_preference: str = "edge"
+    browser_preference: str = "chrome"
     browser_profile: str = "Default"
     login_wait_seconds: int = 40
     cookie_refreshed_at: str = ""

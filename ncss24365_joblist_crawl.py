@@ -30,6 +30,10 @@ DEFAULT_SOURCE_OPTIONS = {
     "detail_mode": "detail_html",
     "request_timeout_seconds": 15.0,
     "sleep_seconds": 0.0,
+    "job_type": "",
+    "sources_name": "",
+    "sources_type": "",
+    "allow_empty_query": False,
 }
 CITY_CODE_MAP = {
     "北京": "110100",
@@ -52,12 +56,27 @@ CITY_CODE_MAP = {
     "合肥": "340100",
     "济南": "370100",
     "福州": "350100",
+    "南昌": "360100",
+    "石家庄": "130100",
+    "太原": "140100",
+    "呼和浩特": "150100",
     "大连": "210200",
     "沈阳": "210100",
+    "长春": "220100",
+    "哈尔滨": "230100",
     "无锡": "320200",
     "常州": "320400",
     "东莞": "441900",
     "佛山": "440600",
+    "南宁": "450100",
+    "海口": "460100",
+    "贵阳": "520100",
+    "昆明": "530100",
+    "拉萨": "540100",
+    "兰州": "620100",
+    "西宁": "630100",
+    "银川": "640100",
+    "乌鲁木齐": "650100",
 }
 REQUEST_HEADERS = {
     "Referer": f"{WEB_BASE_URL}/student/jobs/index.html",
@@ -65,6 +84,7 @@ REQUEST_HEADERS = {
     "(KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
     "X-Requested-With": "XMLHttpRequest",
 }
+INTERN_LIST_REFERER_URL = "https://job.ncss.cn/student/jobs/internindex.html"
 
 
 class CrawlCancelledError(Exception):
@@ -112,7 +132,35 @@ def clean_text(value: Any) -> str:
     return " ".join(str(value or "").replace("\xa0", " ").split()).strip()
 
 
-def normalize_queries(queries: list[str] | None) -> list[str]:
+def parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = clean_text(value).lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def normalize_job_type(value: Any) -> str:
+    normalized = clean_text(value).lower()
+    if normalized in {"", "fulltime", "full_time", "job", "职位", "全职"}:
+        return ""
+    if normalized in {"03", "intern", "internship", "shixi", "实习"}:
+        return "03"
+    return clean_text(value)
+
+
+def normalize_queries(queries: list[str] | None, *, allow_empty: bool = False) -> list[str]:
+    if allow_empty:
+        if queries is None:
+            return [""]
+        values = [clean_text(item) for item in queries if clean_text(item)]
+        return values or [""]
+
     values = [clean_text(item) for item in (queries or DEFAULT_QUERIES) if clean_text(item)]
     return values or list(DEFAULT_QUERIES)
 
@@ -142,10 +190,18 @@ def normalize_source_options(source_options: dict[str, Any] | None) -> dict[str,
         sleep_seconds = float(options.get("sleep_seconds") or DEFAULT_SOURCE_OPTIONS["sleep_seconds"])
     except (TypeError, ValueError):
         sleep_seconds = float(DEFAULT_SOURCE_OPTIONS["sleep_seconds"])
+    job_type = normalize_job_type(options.get("job_type"))
+    sources_name = clean_text(options.get("sources_name"))
+    sources_type = clean_text(options.get("sources_type"))
+    allow_empty_query = parse_bool(options.get("allow_empty_query"), default=bool(job_type))
     return {
         "detail_mode": detail_mode if detail_mode in {"list_only", "detail_html"} else "detail_html",
         "request_timeout_seconds": max(5.0, min(request_timeout_seconds, 60.0)),
         "sleep_seconds": max(0.0, min(sleep_seconds, 5.0)),
+        "job_type": job_type,
+        "sources_name": sources_name,
+        "sources_type": sources_type,
+        "allow_empty_query": allow_empty_query,
     }
 
 
@@ -268,18 +324,34 @@ def fetch_job_list_page(
     page_size: int,
     area_code: str | None,
     timeout_seconds: float,
+    job_type: str = "",
+    sources_name: str = "",
+    sources_type: str = "",
 ) -> dict[str, Any]:
     params = {
         "offset": page_no,
         "limit": page_size,
         "jobName": query,
         "areaCode": area_code or "",
+        "jobType": job_type,
+        "sourcesName": sources_name,
+        "sourcesType": sources_type,
     }
     response = session.get(LIST_API_URL, params=params, timeout=timeout_seconds)
     response.raise_for_status()
     payload = response.json()
     if not payload.get("flag"):
-        raise RuntimeError("24365 列表接口返回异常")
+        messages: list[str] = []
+        for item in payload.get("global") or []:
+            if isinstance(item, dict) and clean_text(item.get("des")):
+                messages.append(clean_text(item.get("des")))
+        for item in payload.get("errors") or []:
+            if isinstance(item, dict) and clean_text(item.get("des")):
+                messages.append(clean_text(item.get("des")))
+            elif clean_text(item):
+                messages.append(clean_text(item))
+        message_text = "；".join(messages) if messages else "24365 列表接口返回异常"
+        raise RuntimeError(message_text)
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
     pagination = data.get("pagenation") if isinstance(data.get("pagenation"), dict) else {}
     items = [item for item in (data.get("list") or []) if isinstance(item, dict) and clean_text(item.get("jobId"))]
@@ -509,6 +581,9 @@ def collect_filtered_jobs(
     detail_mode: str,
     timeout_seconds: float,
     sleep_seconds: float,
+    job_type: str,
+    sources_name: str,
+    sources_type: str,
     should_stop_callback: Callable[[], bool] | None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None,
 ) -> dict[str, Any]:
@@ -517,21 +592,42 @@ def collect_filtered_jobs(
     seen_job_ids: set[str] = set()
     total_pages = 0
     total_count = 0
+    stop_reason = "completed"
 
     for page_no in range(1, max_pages + 1):
         ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
-        payload = fetch_job_list_page(
-            session,
-            query=query,
-            page_no=page_no,
-            page_size=page_size,
-            area_code=area_code,
-            timeout_seconds=timeout_seconds,
-        )
+        try:
+            payload = fetch_job_list_page(
+                session,
+                query=query,
+                page_no=page_no,
+                page_size=page_size,
+                area_code=area_code,
+                timeout_seconds=timeout_seconds,
+                job_type=job_type,
+                sources_name=sources_name,
+                sources_type=sources_type,
+            )
+        except RuntimeError as exc:
+            error_text = clean_text(str(exc))
+            if page_no > 1 and "请登录后查看" in error_text:
+                emit_progress(
+                    progress_callback,
+                    f"24365 {query or '全部'} - {city_name} 第 {page_no} 页命中登录墙，按可访问尾页结束",
+                    query=query or "全部",
+                    city_name=city_name,
+                    page=page_no,
+                    source_code="ncss24365",
+                    stop_reason="login_wall",
+                )
+                stop_reason = "login_wall"
+                break
+            raise
         items = list(payload.get("items") or [])
         total_pages = int(payload.get("total_pages") or total_pages)
         total_count = int(payload.get("total_count") or total_count)
         if not items:
+            stop_reason = "empty_page"
             break
 
         page_jobs: list[dict[str, Any]] = []
@@ -562,7 +658,10 @@ def collect_filtered_jobs(
         if sleep_seconds > 0:
             safe_sleep(sleep_seconds, should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
         if total_pages > 0 and page_no >= total_pages:
+            stop_reason = "reached_total_pages"
             break
+        if page_no >= max_pages:
+            stop_reason = "target_pages_reached"
 
     return {
         "pages": logical_pages,
@@ -570,6 +669,7 @@ def collect_filtered_jobs(
         "api_pages": min(max_pages, total_pages if total_pages > 0 else max_pages),
         "total_count": total_count,
         "total_pages": total_pages,
+        "stop_reason": stop_reason,
     }
 
 
@@ -591,7 +691,7 @@ def run_incremental_update(
         raise RuntimeError("未安装 requests，无法执行 24365 采集")
 
     options = normalize_source_options(source_options)
-    normalized_queries = normalize_queries(queries)
+    normalized_queries = normalize_queries(queries, allow_empty=bool(options["allow_empty_query"]))
     normalized_cities = normalize_cities(cities)
     target_pages = max(1, min(int(max_pages or 1), 10))
     target_page_size = max(1, min(int(page_size or 20), 50))
@@ -606,16 +706,23 @@ def run_incremental_update(
     request_trace: list[dict[str, Any]] = []
 
     session = build_session()
-    emit_progress(progress_callback, "24365 采集启动，模式 requests_api", source_code="ncss24365")
+    if hasattr(session, "headers") and isinstance(session.headers, dict):
+        session.headers["Referer"] = INTERN_LIST_REFERER_URL if str(options["job_type"]) == "03" else REQUEST_HEADERS["Referer"]
+    job_mode_label = "实习聚合" if str(options["job_type"]) == "03" else "职位信息"
+    emit_progress(progress_callback, f"24365 采集启动，模式 requests_api，口径 {job_mode_label}", source_code="ncss24365")
     try:
         for query in normalized_queries:
             for city_name in normalized_cities:
-                ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=1)
+                display_query = query or "全部"
+                ensure_not_cancelled(should_stop_callback, progress_callback, query=display_query, city_name=city_name, page=1)
                 area_code = resolve_city_code(city_name)
                 trace_item: dict[str, Any] = {
                     "query": query,
                     "location_name": city_name,
                     "area_code": area_code or "",
+                    "job_type": str(options["job_type"]),
+                    "sources_name": str(options["sources_name"]),
+                    "sources_type": str(options["sources_type"]),
                     "status": "pending",
                     "target_pages": target_pages,
                     "page_size": target_page_size,
@@ -636,7 +743,7 @@ def run_incremental_update(
                     emit_progress(
                         progress_callback,
                         f"24365 未内置城市码 {city_name}，回退为全国检索后按详情地址过滤",
-                        query=query,
+                        query=display_query,
                         city_name=city_name,
                         source_code="ncss24365",
                     )
@@ -644,7 +751,7 @@ def run_incremental_update(
                     resolved_city_codes[city_name] = area_code
                     trace_item["status"] = "resolved"
 
-                emit_progress(progress_callback, f"24365 开始抓取 {query} - {city_name}", query=query, city_name=city_name, page=1, source_code="ncss24365")
+                emit_progress(progress_callback, f"24365 开始抓取 {display_query} - {city_name}", query=display_query, city_name=city_name, page=1, source_code="ncss24365")
                 collect_result = collect_filtered_jobs(
                     session,
                     query=query,
@@ -655,6 +762,9 @@ def run_incremental_update(
                     detail_mode=str(options["detail_mode"]),
                     timeout_seconds=float(options["request_timeout_seconds"]),
                     sleep_seconds=float(options["sleep_seconds"]),
+                    job_type=str(options["job_type"]),
+                    sources_name=str(options["sources_name"]),
+                    sources_type=str(options["sources_type"]),
                     should_stop_callback=should_stop_callback,
                     progress_callback=progress_callback,
                 )
@@ -663,20 +773,21 @@ def run_incremental_update(
                 trace_item["upstream_total_count"] = int(collect_result.get("total_count") or 0)
                 trace_item["upstream_total_pages"] = int(collect_result.get("total_pages") or 0)
                 trace_item["logical_pages"] = len(logical_pages)
+                trace_item["stop_reason"] = clean_text(collect_result.get("stop_reason"))
 
                 if not logical_pages:
                     trace_item["status"] = "empty"
                     request_trace.append(trace_item)
                     if city_name not in empty_result_locations:
                         empty_result_locations.append(city_name)
-                    emit_progress(progress_callback, f"24365 {query} - {city_name} 未解析到职位", query=query, city_name=city_name, source_code="ncss24365")
+                    emit_progress(progress_callback, f"24365 {display_query} - {city_name} 未解析到职位", query=display_query, city_name=city_name, source_code="ncss24365")
                     continue
 
                 location_fetched = 0
                 location_new = 0
                 location_updated = 0
                 for logical_page_no, page_jobs in enumerate(logical_pages, start=1):
-                    ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=logical_page_no)
+                    ensure_not_cancelled(should_stop_callback, progress_callback, query=display_query, city_name=city_name, page=logical_page_no)
                     stats = save_to_db(page_jobs, source_code="ncss24365")
                     total_fetched += len(page_jobs)
                     total_new += stats["new"]
@@ -686,8 +797,8 @@ def run_incremental_update(
                     location_updated += stats["updated"]
                     emit_progress(
                         progress_callback,
-                        f"24365 {query} - {city_name} 第 {logical_page_no} 页完成：抓取 {len(page_jobs)} 条，新增 {stats['new']}，更新 {stats['updated']}",
-                        query=query,
+                        f"24365 {display_query} - {city_name} 第 {logical_page_no} 页完成：抓取 {len(page_jobs)} 条，新增 {stats['new']}，更新 {stats['updated']}",
+                        query=display_query,
                         city_name=city_name,
                         page=logical_page_no,
                         source_code="ncss24365",
@@ -710,6 +821,9 @@ def run_incremental_update(
         "cities": len(normalized_cities),
         "runtime_mode": "requests_only",
         "detail_mode": options["detail_mode"],
+        "job_type": options["job_type"],
+        "sources_name": options["sources_name"],
+        "sources_type": options["sources_type"],
         "resolved_city_codes": resolved_city_codes,
         "unresolved_locations": unresolved_locations,
         "request_trace": request_trace,
@@ -718,6 +832,7 @@ def run_incremental_update(
             "resolved_targets": sum(1 for item in request_trace if item.get("status") == "resolved"),
             "fallback_targets": len(fallback_to_national_locations),
             "empty_targets": len(empty_result_locations),
+            "login_wall_targets": sum(1 for item in request_trace if item.get("stop_reason") == "login_wall"),
         },
         "fallback_to_national_locations": fallback_to_national_locations,
         "empty_result_locations": empty_result_locations,

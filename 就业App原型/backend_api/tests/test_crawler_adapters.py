@@ -17,6 +17,44 @@ from app.services import crawler_adapters  # noqa: E402
 
 
 class CrawlerAdaptersTests(unittest.TestCase):
+    def test_run_incremental_crawl_for_sources_preserves_partial_counts_when_source_fails(self) -> None:
+        class PartialFailure(RuntimeError):
+            def __init__(self) -> None:
+                super().__init__("分页超时")
+                self.partial_result = {
+                    "total_fetched": 7,
+                    "new_to_db": 5,
+                    "zhilian_request_trace": [{"query": "Java", "status": "exception"}],
+                }
+
+        def raise_partial_failure(**kwargs):
+            raise PartialFailure()
+
+        with patch.object(
+            crawler_adapters,
+            "get_source_info",
+            side_effect=lambda source_code: {"source_name": source_code, "enabled": True},
+        ), patch.object(
+            crawler_adapters,
+            "_load_source_module",
+            return_value=types.SimpleNamespace(run_incremental_update=raise_partial_failure),
+        ):
+            result = crawler_adapters.run_incremental_crawl_for_sources(
+                sources=["zhilian"],
+                queries=["Java"],
+                cities=["北京"],
+                max_pages=2,
+                page_size=30,
+                runtime_mode="browser",
+            )
+
+        self.assertEqual(result["total_fetched"], 7)
+        self.assertEqual(result["new_to_db"], 5)
+        self.assertEqual(result["sources"][0]["status"], "failed")
+        self.assertEqual(result["sources"][0]["total_fetched"], 7)
+        self.assertEqual(result["sources"][0]["new_to_db"], 5)
+        self.assertEqual(result["source_details"]["zhilian"]["zhilian_request_trace"][0]["status"], "exception")
+
     def test_run_incremental_crawl_for_sources_preserves_source_details_for_mixed_sources(self) -> None:
         boss_module = types.SimpleNamespace(
             run_incremental_update=lambda **kwargs: {

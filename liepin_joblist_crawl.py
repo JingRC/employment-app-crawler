@@ -45,6 +45,12 @@ class CrawlCancelledError(Exception):
     pass
 
 
+class PartialCrawlError(RuntimeError):
+    def __init__(self, message: str, *, partial_result: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.partial_result = dict(partial_result or {})
+
+
 def configure_stdio() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         try:
@@ -359,11 +365,27 @@ def extract_list_request_sample(packet: Any, page: Any, *, query: str, city_name
 
 
 def replay_list_api_sample(sample: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+    result = fetch_list_with_request_sample(sample, timeout_seconds)
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    return {
+        "ok": bool(payload.get("items")),
+        "items": len(payload.get("items") or []),
+        "status_code": int(result.get("status_code") or 0),
+        "content_type": clean_text(result.get("content_type")),
+        "current_page": int(payload.get("current_page") or 0),
+        "city_code": clean_text(payload.get("city_code")),
+        "response_keys": clean_text(result.get("response_keys")),
+        "reason": clean_text(result.get("reason")),
+        "body_preview": clean_text(result.get("body_preview")),
+    }
+
+
+def fetch_list_with_request_sample(sample: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
     if requests is None:
-        return {"ok": False, "reason": "requests_not_installed"}
+        return {"payload": {}, "reason": "requests_not_installed"}
     request_url = clean_text(sample.get("url"))
     if not request_url:
-        return {"ok": False, "reason": "missing_url"}
+        return {"payload": {}, "reason": "missing_url"}
     headers = sample.get("headers") if isinstance(sample.get("headers"), dict) else {}
     post_data = sample.get("post_data") if isinstance(sample.get("post_data"), dict) else {}
     raw_body_text = clean_text(sample.get("raw_body_text"))
@@ -382,7 +404,7 @@ def replay_list_api_sample(sample: dict[str, Any], timeout_seconds: float) -> di
             response_json = response.json()
         except ValueError:
             return {
-                "ok": False,
+                "payload": {},
                 "reason": "non_json_response",
                 "status_code": int(getattr(response, "status_code", 0) or 0),
                 "content_type": clean_text(response.headers.get("Content-Type")),
@@ -390,19 +412,51 @@ def replay_list_api_sample(sample: dict[str, Any], timeout_seconds: float) -> di
             }
         payload = parse_list_response_body(response_json)
     except Exception as exc:
-        return {"ok": False, "reason": str(exc)}
+        return {"payload": {}, "reason": str(exc)}
     response_data = ((response_json.get("data") or {}).get("data") or {}) if isinstance(response_json, dict) else {}
     form = ((post_data.get("data") or {}).get("mainSearchPcConditionForm") or {}) if isinstance(post_data, dict) else {}
     return {
-        "ok": bool(payload.get("items")),
-        "items": len(payload.get("items") or []),
+        "payload": {
+            "items": list(payload.get("items") or []),
+            "current_page": int(form.get("currentPage") or 0),
+            "city_code": clean_text(form.get("city") or form.get("dq")),
+        },
         "status_code": int(getattr(response, "status_code", 0) or 0),
         "content_type": clean_text(response.headers.get("Content-Type")),
-        "current_page": int(form.get("currentPage") or 0),
-        "city_code": clean_text(form.get("city") or form.get("dq")),
         "response_keys": ",".join(sorted(str(key) for key in response_data.keys()))[:120],
         "reason": "empty_items" if not payload.get("items") else "",
         "body_preview": "",
+    }
+
+
+def build_request_sample_for_page(sample: dict[str, Any], target_page_no: int) -> dict[str, Any]:
+    updated_sample = json.loads(json.dumps(sample, ensure_ascii=False))
+    post_data = updated_sample.get("post_data") if isinstance(updated_sample.get("post_data"), dict) else {}
+    data = post_data.get("data") if isinstance(post_data.get("data"), dict) else {}
+    form = data.get("mainSearchPcConditionForm") if isinstance(data.get("mainSearchPcConditionForm"), dict) else {}
+    if form:
+        form["currentPage"] = int(target_page_no)
+        if "pageNo" in form:
+            form["pageNo"] = int(target_page_no)
+    updated_sample["raw_body_text"] = json.dumps(post_data, ensure_ascii=False, separators=(",", ":")) if post_data else clean_text(updated_sample.get("raw_body_text"))
+    return updated_sample
+
+
+def load_page_via_request_sample(
+    request_sample: dict[str, Any],
+    *,
+    target_page_no: int,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    updated_sample = build_request_sample_for_page(request_sample, target_page_no)
+    result = fetch_list_with_request_sample(updated_sample, timeout_seconds)
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    return {
+        "items": list(payload.get("items") or []),
+        "current_page": int(payload.get("current_page") or 0),
+        "city_code": clean_text(payload.get("city_code")),
+        "request_sample": updated_sample,
+        "reason": clean_text(result.get("reason")),
     }
 
 
@@ -1404,6 +1458,23 @@ def run_incremental_update(
     temp_user_data_path = str(getattr(options, "_copilot_temp_user_data_path", "") or "")
     page = ChromiumPage(options)
     try:
+        def build_partial_result() -> dict[str, Any]:
+            return {
+                "total_fetched": total_fetched,
+                "new_to_db": total_new,
+                "updated": total_updated,
+                "queries": len(normalized_queries),
+                "cities": len(normalized_cities),
+                "runtime_mode": "browser",
+                "detail_mode": "intercept_api",
+                "resolved_city_entries": dict(resolved_city_entries),
+                "footer_city_pages": dict(footer_city_pages),
+                "request_probe_attempts": request_probe_attempts,
+                "request_probe_successes": request_probe_successes,
+                "captured_request_samples": len(captured_request_samples),
+                "liepin_request_trace": list(liepin_request_trace),
+            }
+
         emit_progress(progress_callback, "猎聘采集启动，模式 browser_intercept_api")
         if normalized_source_options["city_mode"] == "result_filter_only":
             emit_progress(progress_callback, "猎聘城市模式：仅做结果过滤，不主动切换站内城市", source_code="liepin")
@@ -1419,162 +1490,222 @@ def run_incremental_update(
                 pages_completed = 0
                 stop_reason = ""
                 captured_request_sample = False
-                emit_progress(progress_callback, f"猎聘开始抓取 {query} - {city_name} 第 1 页", query=query, city_name=city_name, page=1)
-                first_payload = capture_current_page_payload(
-                    page,
-                    query=query,
-                    city_name=city_name,
-                    city_mode=str(normalized_source_options["city_mode"]),
-                    resolved_city_entries=resolved_city_entries,
-                    footer_city_pages=footer_city_pages,
-                    should_stop_callback=should_stop_callback,
-                    progress_callback=progress_callback,
-                )
-                initial_request_sample = first_payload.get("request_sample") if isinstance(first_payload, dict) else {}
-                if initial_request_sample:
-                    captured_request_sample = True
-                    captured_request_samples[f"{query}|{city_name}"] = initial_request_sample
-                    emit_progress(
-                        progress_callback,
-                        f"猎聘 {query} - {city_name} 首屏请求样本摘要：{summarize_request_sample(initial_request_sample)}",
+                try:
+                    emit_progress(progress_callback, f"猎聘开始抓取 {query} - {city_name} 第 1 页", query=query, city_name=city_name, page=1)
+                    first_payload = capture_current_page_payload(
+                        page,
                         query=query,
                         city_name=city_name,
-                        page=1,
+                        city_mode=str(normalized_source_options["city_mode"]),
+                        resolved_city_entries=resolved_city_entries,
+                        footer_city_pages=footer_city_pages,
+                        should_stop_callback=should_stop_callback,
+                        progress_callback=progress_callback,
                     )
-                    emit_progress(
-                        progress_callback,
-                        f"猎聘 {query} - {city_name} cond-init 诊断：{summarize_init_context(initial_request_sample.get('init_context') if isinstance(initial_request_sample.get('init_context'), dict) else {})}",
-                        query=query,
-                        city_name=city_name,
-                        page=1,
-                    )
-                    emit_progress(
-                        progress_callback,
-                        f"猎聘 {query} - {city_name} 页面状态诊断：{summarize_page_state_context(initial_request_sample.get('page_state_context') if isinstance(initial_request_sample.get('page_state_context'), dict) else {})}",
-                        query=query,
-                        city_name=city_name,
-                        page=1,
-                    )
-                    emit_progress(
-                        progress_callback,
-                        f"猎聘 {query} - {city_name} 请求对象诊断：{summarize_request_debug_context(initial_request_sample.get('request_debug_context') if isinstance(initial_request_sample.get('request_debug_context'), dict) else {})}",
-                        query=query,
-                        city_name=city_name,
-                        page=1,
-                    )
-                    if normalized_source_options["enable_request_probe"]:
-                        request_probe_attempts += 1
-                        city_request_probe_attempts += 1
-                        probe_result = replay_list_api_sample(
-                            initial_request_sample,
-                            timeout_seconds=float(normalized_source_options["probe_timeout_seconds"]),
-                        )
-                        if probe_result.get("ok"):
-                            request_probe_successes += 1
-                            city_request_probe_successes += 1
-                            emit_progress(
-                                progress_callback,
-                                (
-                                    f"猎聘 {query} - {city_name} requests 复放探针成功：返回 {probe_result.get('items', 0)} 条，"
-                                    f"page={probe_result.get('current_page', 0)} city={clean_text(probe_result.get('city_code')) or '-'}"
-                                ),
-                                query=query,
-                                city_name=city_name,
-                                page=1,
-                            )
-                        else:
-                            emit_progress(
-                                progress_callback,
-                                (
-                                    f"猎聘 {query} - {city_name} requests 复放探针失败：{clean_text(probe_result.get('reason')) or '未返回职位'}；"
-                                    f"status={probe_result.get('status_code', 0)}；response_keys={clean_text(probe_result.get('response_keys')) or '-'}；"
-                                    f"body={clean_text(probe_result.get('body_preview')) or '-'}；sample={summarize_request_sample(initial_request_sample)}"
-                                ),
-                                query=query,
-                                city_name=city_name,
-                                page=1,
-                            )
-                            emit_progress(
-                                progress_callback,
-                                f"猎聘 {query} - {city_name} form_city 来源诊断：{diagnose_form_city_source(initial_request_sample)}",
-                                query=query,
-                                city_name=city_name,
-                                page=1,
-                            )
-                current_payload = first_payload
-                for page_no in range(1, target_pages + 1):
-                    ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
-                    if page_no > 1:
-                        emit_progress(progress_callback, f"猎聘开始抓取 {query} - {city_name} 第 {page_no} 页", query=query, city_name=city_name, page=page_no)
-                        current_payload = load_page_via_click(
-                            page,
-                            target_page_no=page_no,
-                            query=query,
-                            should_stop_callback=should_stop_callback,
-                            progress_callback=progress_callback,
-                        )
-                    request_sample = current_payload.get("request_sample") if isinstance(current_payload, dict) else {}
-                    if request_sample:
+                    initial_request_sample = first_payload.get("request_sample") if isinstance(first_payload, dict) else {}
+                    if initial_request_sample:
                         captured_request_sample = True
-                        previous_sample = captured_request_samples.get(f"{query}|{city_name}") or {}
-                        captured_request_samples[f"{query}|{city_name}"] = request_sample
-                        if previous_sample:
-                            emit_progress(
-                                progress_callback,
-                                f"猎聘 {query} - {city_name} 第 {page_no} 页请求上下文变化：{summarize_sample_diff(previous_sample, request_sample)}",
-                                query=query,
-                                city_name=city_name,
-                                page=page_no,
+                        captured_request_samples[f"{query}|{city_name}"] = initial_request_sample
+                        emit_progress(
+                            progress_callback,
+                            f"猎聘 {query} - {city_name} 首屏请求样本摘要：{summarize_request_sample(initial_request_sample)}",
+                            query=query,
+                            city_name=city_name,
+                            page=1,
+                        )
+                        emit_progress(
+                            progress_callback,
+                            f"猎聘 {query} - {city_name} cond-init 诊断：{summarize_init_context(initial_request_sample.get('init_context') if isinstance(initial_request_sample.get('init_context'), dict) else {})}",
+                            query=query,
+                            city_name=city_name,
+                            page=1,
+                        )
+                        emit_progress(
+                            progress_callback,
+                            f"猎聘 {query} - {city_name} 页面状态诊断：{summarize_page_state_context(initial_request_sample.get('page_state_context') if isinstance(initial_request_sample.get('page_state_context'), dict) else {})}",
+                            query=query,
+                            city_name=city_name,
+                            page=1,
+                        )
+                        emit_progress(
+                            progress_callback,
+                            f"猎聘 {query} - {city_name} 请求对象诊断：{summarize_request_debug_context(initial_request_sample.get('request_debug_context') if isinstance(initial_request_sample.get('request_debug_context'), dict) else {})}",
+                            query=query,
+                            city_name=city_name,
+                            page=1,
+                        )
+                        if normalized_source_options["enable_request_probe"]:
+                            request_probe_attempts += 1
+                            city_request_probe_attempts += 1
+                            probe_result = replay_list_api_sample(
+                                initial_request_sample,
+                                timeout_seconds=float(normalized_source_options["probe_timeout_seconds"]),
                             )
-                    raw_items = list(current_payload.get("items") or [])
-                    if not raw_items:
-                        stop_reason = "empty"
-                        emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页未解析到职位", query=query, city_name=city_name, page=page_no)
-                        break
+                            if probe_result.get("ok"):
+                                request_probe_successes += 1
+                                city_request_probe_successes += 1
+                                emit_progress(
+                                    progress_callback,
+                                    (
+                                        f"猎聘 {query} - {city_name} requests 复放探针成功：返回 {probe_result.get('items', 0)} 条，"
+                                        f"page={probe_result.get('current_page', 0)} city={clean_text(probe_result.get('city_code')) or '-'}"
+                                    ),
+                                    query=query,
+                                    city_name=city_name,
+                                    page=1,
+                                )
+                            else:
+                                emit_progress(
+                                    progress_callback,
+                                    (
+                                        f"猎聘 {query} - {city_name} requests 复放探针失败：{clean_text(probe_result.get('reason')) or '未返回职位'}；"
+                                        f"status={probe_result.get('status_code', 0)}；response_keys={clean_text(probe_result.get('response_keys')) or '-'}；"
+                                        f"body={clean_text(probe_result.get('body_preview')) or '-'}；sample={summarize_request_sample(initial_request_sample)}"
+                                    ),
+                                    query=query,
+                                    city_name=city_name,
+                                    page=1,
+                                )
+                                emit_progress(
+                                    progress_callback,
+                                    f"猎聘 {query} - {city_name} form_city 来源诊断：{diagnose_form_city_source(initial_request_sample)}",
+                                    query=query,
+                                    city_name=city_name,
+                                    page=1,
+                                )
+                    current_payload = first_payload
+                    for page_no in range(1, target_pages + 1):
+                        ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
+                        if page_no > 1:
+                            emit_progress(progress_callback, f"猎聘开始抓取 {query} - {city_name} 第 {page_no} 页", query=query, city_name=city_name, page=page_no)
+                            request_sample_key = f"{query}|{city_name}"
+                            request_sample = captured_request_samples.get(request_sample_key) or {}
+                            current_payload = {}
+                            if request_sample:
+                                current_payload = load_page_via_request_sample(
+                                    request_sample,
+                                    target_page_no=page_no,
+                                    timeout_seconds=float(normalized_source_options["probe_timeout_seconds"]),
+                                )
+                                if current_payload.get("items"):
+                                    emit_progress(
+                                        progress_callback,
+                                        f"猎聘 {query} - {city_name} 第 {page_no} 页 requests 直连成功",
+                                        query=query,
+                                        city_name=city_name,
+                                        page=page_no,
+                                    )
+                                else:
+                                    emit_progress(
+                                        progress_callback,
+                                        (
+                                            f"猎聘 {query} - {city_name} 第 {page_no} 页 requests 直连失败，"
+                                            f"回退浏览器：{clean_text(current_payload.get('reason')) or '未返回职位'}"
+                                        ),
+                                        query=query,
+                                        city_name=city_name,
+                                        page=page_no,
+                                    )
+                                    current_payload = {}
+                            if not current_payload:
+                                current_payload = load_page_via_click(
+                                    page,
+                                    target_page_no=page_no,
+                                    query=query,
+                                    should_stop_callback=should_stop_callback,
+                                    progress_callback=progress_callback,
+                                )
+                        request_sample = current_payload.get("request_sample") if isinstance(current_payload, dict) else {}
+                        if request_sample:
+                            captured_request_sample = True
+                            previous_sample = captured_request_samples.get(f"{query}|{city_name}") or {}
+                            captured_request_samples[f"{query}|{city_name}"] = request_sample
+                            if previous_sample:
+                                emit_progress(
+                                    progress_callback,
+                                    f"猎聘 {query} - {city_name} 第 {page_no} 页请求上下文变化：{summarize_sample_diff(previous_sample, request_sample)}",
+                                    query=query,
+                                    city_name=city_name,
+                                    page=page_no,
+                                )
+                        raw_items = list(current_payload.get("items") or [])
+                        if not raw_items:
+                            stop_reason = "empty"
+                            emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页未解析到职位", query=query, city_name=city_name, page=page_no)
+                            break
 
-                    page_signature = (query, city_name, "|".join(extract_page_signature_token(item) for item in raw_items[:5]))
-                    if page_signature in seen_page_signatures:
-                        stop_reason = "duplicate_page"
-                        emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页出现重复分页签名，提前结束", query=query, city_name=city_name, page=page_no)
-                        break
-                    seen_page_signatures.add(page_signature)
+                        page_signature = (query, city_name, "|".join(extract_page_signature_token(item) for item in raw_items[:5]))
+                        if page_signature in seen_page_signatures:
+                            stop_reason = "duplicate_page"
+                            emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页出现重复分页签名，提前结束", query=query, city_name=city_name, page=page_no)
+                            break
+                        seen_page_signatures.add(page_signature)
 
-                    if current_payload.get("from_dom"):
-                        page_jobs = [dom_card_to_job(item) for item in raw_items[:target_page_size]]
-                    else:
-                        page_jobs = [normalize_job_item(item) for item in raw_items[:target_page_size]]
-                    page_jobs = [job for job in page_jobs if clean_text(job.get("title")) and clean_text(job.get("company_name"))]
-                    page_jobs = [job for job in page_jobs if city_matches(city_name, str(job.get("city_name") or ""))]
-                    if not page_jobs and city_name != "全国":
-                        stop_reason = "city_filtered"
-                        emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页无匹配城市职位，继续尝试下一页", query=query, city_name=city_name, page=page_no)
-                        continue
-                    if not page_jobs:
-                        stop_reason = "empty_normalized"
-                        emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页没有可入库职位", query=query, city_name=city_name, page=page_no)
-                        break
+                        if current_payload.get("from_dom"):
+                            page_jobs = [dom_card_to_job(item) for item in raw_items[:target_page_size]]
+                        else:
+                            page_jobs = [normalize_job_item(item) for item in raw_items[:target_page_size]]
+                        page_jobs = [job for job in page_jobs if clean_text(job.get("title")) and clean_text(job.get("company_name"))]
+                        page_jobs = [job for job in page_jobs if city_matches(city_name, str(job.get("city_name") or ""))]
+                        if not page_jobs and city_name != "全国":
+                            stop_reason = "city_filtered"
+                            emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页无匹配城市职位，继续尝试下一页", query=query, city_name=city_name, page=page_no)
+                            continue
+                        if not page_jobs:
+                            stop_reason = "empty_normalized"
+                            emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页没有可入库职位", query=query, city_name=city_name, page=page_no)
+                            break
 
-                    all_seen_before_page = all(clean_text(job.get("source_job_id")) in seen_job_ids for job in page_jobs)
-                    stats = save_to_db(page_jobs, source_code="liepin")
-                    total_fetched += len(page_jobs)
-                    total_new += stats["new"]
-                    total_updated += stats["updated"]
-                    city_fetched += len(page_jobs)
-                    city_new += stats["new"]
-                    city_updated += stats["updated"]
-                    pages_completed += 1
-                    seen_job_ids.update(clean_text(job.get("source_job_id")) for job in page_jobs if clean_text(job.get("source_job_id")))
-                    emit_progress(
-                        progress_callback,
-                        f"猎聘 {query} - {city_name} 第 {page_no} 页完成：抓取 {len(page_jobs)} 条，新增 {stats['new']}，更新 {stats['updated']}",
-                        query=query,
-                        city_name=city_name,
-                        page=page_no,
+                        all_seen_before_page = all(clean_text(job.get("source_job_id")) in seen_job_ids for job in page_jobs)
+                        stats = save_to_db(page_jobs, source_code="liepin")
+                        total_fetched += len(page_jobs)
+                        total_new += stats["new"]
+                        total_updated += stats["updated"]
+                        city_fetched += len(page_jobs)
+                        city_new += stats["new"]
+                        city_updated += stats["updated"]
+                        pages_completed += 1
+                        seen_job_ids.update(clean_text(job.get("source_job_id")) for job in page_jobs if clean_text(job.get("source_job_id")))
+                        emit_progress(
+                            progress_callback,
+                            f"猎聘 {query} - {city_name} 第 {page_no} 页完成：抓取 {len(page_jobs)} 条，新增 {stats['new']}，更新 {stats['updated']}",
+                            query=query,
+                            city_name=city_name,
+                            page=page_no,
+                        )
+                        if all_seen_before_page:
+                            stop_reason = "all_seen"
+                            emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页全部为已处理职位，提前结束", query=query, city_name=city_name, page=page_no)
+                            break
+                except CrawlCancelledError:
+                    raise
+                except Exception as exc:
+                    stop_reason = stop_reason or "exception"
+                    city_entry = dict(resolved_city_entries.get(city_name) or {})
+                    liepin_request_trace.append(
+                        {
+                            "query": query,
+                            "location_name": city_name,
+                            "status": stop_reason,
+                            "pages_completed": pages_completed,
+                            "fetched_count": city_fetched,
+                            "new_count": city_new,
+                            "updated_count": city_updated,
+                            "request_probe_attempts": city_request_probe_attempts,
+                            "request_probe_successes": city_request_probe_successes,
+                            "captured_request_sample": captured_request_sample,
+                            "resolved_city_code": clean_text(city_entry.get("code")),
+                            "resolved_city_name": clean_text(city_entry.get("name")),
+                            "resolved_search_url": clean_text(city_entry.get("search_url")),
+                            "footer_city_page": clean_text(footer_city_pages.get(city_name)),
+                            "failure_reason": clean_text(exc),
+                        }
                     )
-                    if all_seen_before_page:
-                        stop_reason = "all_seen"
-                        emit_progress(progress_callback, f"猎聘 {query} - {city_name} 第 {page_no} 页全部为已处理职位，提前结束", query=query, city_name=city_name, page=page_no)
-                        break
+                    emit_progress(progress_callback, f"猎聘 {query} - {city_name} 中断：{clean_text(exc) or '未知错误'}", query=query, city_name=city_name, page=max(1, pages_completed))
+                    raise PartialCrawlError(
+                        f"猎聘部分抓取失败：{query} - {city_name} - {clean_text(exc) or exc.__class__.__name__}",
+                        partial_result=build_partial_result(),
+                    ) from exc
 
                 if not stop_reason:
                     stop_reason = "target_pages_reached"
@@ -1599,21 +1730,7 @@ def run_incremental_update(
                 )
 
         emit_progress(progress_callback, f"猎聘采集完成：抓取 {total_fetched} 条，新增 {total_new} 条，更新 {total_updated} 条")
-        return {
-            "total_fetched": total_fetched,
-            "new_to_db": total_new,
-            "updated": total_updated,
-            "queries": len(normalized_queries),
-            "cities": len(normalized_cities),
-            "runtime_mode": "browser",
-            "detail_mode": "intercept_api",
-            "resolved_city_entries": resolved_city_entries,
-            "footer_city_pages": footer_city_pages,
-            "request_probe_attempts": request_probe_attempts,
-            "request_probe_successes": request_probe_successes,
-            "captured_request_samples": len(captured_request_samples),
-            "liepin_request_trace": liepin_request_trace,
-        }
+        return build_partial_result()
     finally:
         try:
             page.quit()

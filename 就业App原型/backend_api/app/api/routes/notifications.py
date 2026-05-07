@@ -1,7 +1,14 @@
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.notification import JobNotificationTimelineData, NotificationListData
-from app.services.job_service import add_notification, query_job_notification_timeline, query_notifications, set_notification_read
+from app.schemas.notification import JobNotificationTimelineData, NotificationListData, NotificationStatsData
+from app.services.job_service import (
+    add_notification,
+    query_job_notification_timeline,
+    query_notification_stats,
+    query_notifications,
+    set_all_notifications_read,
+    set_notification_read,
+)
 
 router = APIRouter()
 
@@ -33,9 +40,21 @@ def get_job_notification_timeline(job_id: int, limit: int = 20) -> dict:
     return {"code": 0, "message": "success", "data": data.model_dump()}
 
 
+@router.get("/stats")
+def get_notification_stats_api() -> dict:
+    data = NotificationStatsData(**query_notification_stats())
+    return {"code": 0, "message": "success", "data": data.model_dump()}
+
+
 @router.post("/{notification_id}/read")
 def mark_notification_read_api(notification_id: int) -> dict:
     success = set_notification_read(notification_id)
     if not success:
         raise HTTPException(status_code=404, detail="notification not found")
     return {"code": 0, "message": "success", "data": True}
+
+
+@router.post("/read-all")
+def mark_all_notifications_read_api() -> dict:
+    affected = set_all_notifications_read()
+    return {"code": 0, "message": "success", "data": {"affected": affected}}

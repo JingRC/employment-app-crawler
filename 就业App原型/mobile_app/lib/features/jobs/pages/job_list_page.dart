@@ -6,9 +6,18 @@ import '../../../shared/models/job_item.dart';
 import 'job_detail_page.dart';
 
 class JobListPage extends StatefulWidget {
-  const JobListPage({this.embedded = false, super.key});
+  const JobListPage({
+    this.embedded = false,
+    this.initialKeyword = '',
+    this.initialCityName = '青岛',
+    this.pageTitle = '职位列表',
+    super.key,
+  });
 
   final bool embedded;
+  final String initialKeyword;
+  final String initialCityName;
+  final String pageTitle;
 
   @override
   State<JobListPage> createState() => _JobListPageState();
@@ -25,6 +34,7 @@ class _JobListPageState extends State<JobListPage> {
 
   bool _loading = true;
   bool _loadingMore = false;
+  bool _savingSearch = false;
   String? _error;
   List<JobItem> _jobs = const [];
   List<String> _searchHistory = const [];
@@ -36,6 +46,8 @@ class _JobListPageState extends State<JobListPage> {
   @override
   void initState() {
     super.initState();
+    _keywordController.text = widget.initialKeyword;
+    _cityController.text = widget.initialCityName;
     _scrollController.addListener(_onScroll);
     _initializePage();
   }
@@ -165,6 +177,47 @@ class _JobListPageState extends State<JobListPage> {
     });
   }
 
+  Future<void> _saveCurrentSearch() async {
+    final keyword = _keywordController.text.trim();
+    final city = _cityController.text.trim();
+    if (keyword.isEmpty && city.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先输入关键词或城市后再保存订阅')),
+      );
+      return;
+    }
+
+    setState(() {
+      _savingSearch = true;
+    });
+    try {
+      final result = await _apiClient.createSavedSearch(
+        keyword: keyword,
+        cityName: city,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已保存订阅：${[result.keyword, result.cityName].where((item) => item.isNotEmpty).join(' · ')}'),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保存订阅失败: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _savingSearch = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final content = Column(
@@ -180,7 +233,7 @@ class _JobListPageState extends State<JobListPage> {
                     hintText: '输入职位关键词，例如 Java',
                     border: OutlineInputBorder(),
                   ),
-                  onSubmitted: (_) => _loadJobs(),
+                  onSubmitted: (_) => _loadJobs(reset: true),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -192,7 +245,7 @@ class _JobListPageState extends State<JobListPage> {
                           labelText: '城市',
                           border: OutlineInputBorder(),
                         ),
-                        onSubmitted: (_) => _loadJobs(),
+                        onSubmitted: (_) => _loadJobs(reset: true),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -201,6 +254,21 @@ class _JobListPageState extends State<JobListPage> {
                       child: const Text('搜索'),
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.tonalIcon(
+                    onPressed: _savingSearch ? null : _saveCurrentSearch,
+                    icon: _savingSearch
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.notifications_active_outlined),
+                    label: const Text('保存当前搜索'),
+                  ),
                 ),
                 if (_searchHistory.isNotEmpty) ...[
                   const SizedBox(height: 12),
@@ -245,7 +313,7 @@ class _JobListPageState extends State<JobListPage> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('职位列表')),
+      appBar: AppBar(title: Text(widget.pageTitle)),
       body: content,
     );
   }

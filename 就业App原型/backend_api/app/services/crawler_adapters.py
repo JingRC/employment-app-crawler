@@ -13,18 +13,38 @@ CODE_ROOT = Path(__file__).resolve().parents[4]
 SOURCE_SCRIPTS: dict[str, Path] = {
     "boss": CODE_ROOT / "zhipin_joblist_crawl.py",
     "boss_dp": CODE_ROOT / "zhipin_dp_crawl_v2.py",
+    "buildhr": CODE_ROOT / "buildhr_joblist_crawl.py",
+    "chenhr": CODE_ROOT / "chenhr_joblist_crawl.py",
+    "construct_buildhr": CODE_ROOT / "yingcai_joblist_crawl.py",
+    "doctor_healthr": CODE_ROOT / "yingcai_joblist_crawl.py",
+    "dxy_job": CODE_ROOT / "dxy_job_joblist_crawl.py",
+    "env_buildhr": CODE_ROOT / "yingcai_joblist_crawl.py",
+    "gaoxiaojob": CODE_ROOT / "gaoxiaojob_joblist_crawl.py",
     "guopin": CODE_ROOT / "guopin_joblist_crawl.py",
+    "healthr": CODE_ROOT / "healthr_joblist_crawl.py",
+    "healthr_doctor": CODE_ROOT / "healthr_doctor_joblist_crawl.py",
     "jobmohrss": CODE_ROOT / "jobmohrss_joblist_crawl.py",
+    "jobonline": CODE_ROOT / "jobonline_joblist_crawl.py",
     "lagou": CODE_ROOT / "lagou_joblist_crawl.py",
     "liepin": CODE_ROOT / "liepin_joblist_crawl.py",
+    "mhg_chenhr": CODE_ROOT / "yingcai_joblist_crawl.py",
     "ncss24365": CODE_ROOT / "ncss24365_joblist_crawl.py",
+    "newenergy_chenhr": CODE_ROOT / "yingcai_joblist_crawl.py",
+    "niuke_campus": CODE_ROOT / "niuke_campus_joblist_crawl.py",
+    "pha_healthr": CODE_ROOT / "yingcai_joblist_crawl.py",
     "qdhr": CODE_ROOT / "qdhr_joblist_crawl.py",
     "qingdao_rc": CODE_ROOT / "qingdao_rc_joblist_crawl.py",
+    "qlrc": CODE_ROOT / "qlrc_joblist_crawl.py",
     "rcsd_talents": CODE_ROOT / "rcsd_talents_joblist_crawl.py",
     "sdgxbys": CODE_ROOT / "sdgxbys_joblist_crawl.py",
     "sdgxbys_campus": CODE_ROOT / "sdgxbys_campus_joblist_crawl.py",
+    "jxhg_chenhr": CODE_ROOT / "yingcai_joblist_crawl.py",
     "job51": CODE_ROOT / "job51_joblist_crawl.py",
+    "sales_chenhr": CODE_ROOT / "yingcai_joblist_crawl.py",
     "shixiseng": CODE_ROOT / "shixiseng_joblist_crawl.py",
+    "sysh_chenhr": CODE_ROOT / "yingcai_joblist_crawl.py",
+    "yingjiesheng": CODE_ROOT / "yingjiesheng_joblist_crawl.py",
+    "wuba": CODE_ROOT / "wuba_joblist_crawl.py",
     "zhilian": CODE_ROOT / "zhilian_joblist_crawl.py",
 }
 
@@ -63,6 +83,11 @@ def list_crawl_sources(*, include_disabled: bool = True) -> list[dict[str, Any]]
 
 def load_source_module(source_code: str) -> Any:
     return _load_source_module(source_code)
+
+
+def _extract_partial_result(exc: Exception) -> dict[str, Any]:
+    partial_result = getattr(exc, "partial_result", None)
+    return dict(partial_result) if isinstance(partial_result, dict) else {}
 
 
 def run_incremental_crawl_for_sources(
@@ -136,6 +161,8 @@ def run_incremental_crawl_for_sources(
                 signature = inspect.signature(module.run_incremental_update)
             except (TypeError, ValueError):
                 signature = None
+            if signature is not None and "source_code" in signature.parameters:
+                kwargs["source_code"] = source_code
             if signature is not None and "source_options" in signature.parameters:
                 kwargs["source_options"] = dict(normalized_source_options.get(source_code) or {})
 
@@ -169,7 +196,13 @@ def run_incremental_crawl_for_sources(
             failed_source_count += 1
             failure_message = str(exc)
             source_failure_messages.append(f"{source_name}: {failure_message}")
+            partial_result = _extract_partial_result(exc)
+            fetched = int(partial_result.get("total_fetched", 0)) if partial_result else 0
+            created = int(partial_result.get("new_to_db", 0)) if partial_result else 0
+            total_fetched += fetched
+            new_to_db += created
             failure_result = {
+                **partial_result,
                 "error": failure_message,
                 "exception_type": exc.__class__.__name__,
             }
@@ -180,8 +213,8 @@ def run_incremental_crawl_for_sources(
                     "source_name": source_name,
                     "status": "failed",
                     "reason": failure_message,
-                    "total_fetched": 0,
-                    "new_to_db": 0,
+                    "total_fetched": fetched,
+                    "new_to_db": created,
                     "result": failure_result,
                 }
             )

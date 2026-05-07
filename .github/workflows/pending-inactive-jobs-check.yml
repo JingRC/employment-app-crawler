@@ -1,0 +1,157 @@
+name: pending-inactive-jobs-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: Comma-separated source codes. Use none to skip all sources.
+        required: false
+        default: ncss24365,job51,zhilian,liepin,guopin,lagou,boss_dp,boss,chenhr,qdhr,buildhr,jobmohrss,shixiseng,rcsd_talents,sdgxbys,healthr,qingdao_rc,healthr_doctor,sdgxbys_campus,qlrc,niuke_campus,yingjiesheng,dxy_job,gaoxiaojob,wuba,jobonline,jxhg_chenhr,mhg_chenhr,sysh_chenhr,newenergy_chenhr,sales_chenhr,doctor_healthr,pha_healthr,env_buildhr,construct_buildhr
+      validate_startup:
+        description: Only validate startup and summary writing.
+        required: false
+        type: boolean
+        default: false
+      limit:
+        description: Max jobs to verify per run.
+        required: false
+        type: number
+        default: 500
+      workers:
+        description: Number of parallel workers for URL verification.
+        required: false
+        type: number
+        default: 8
+      timeout:
+        description: Timeout per URL request in seconds.
+        required: false
+        type: number
+        default: 8.0
+  schedule:
+    - cron: '30 2,10,14,18,22 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-maintenance-db-write
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            就业App原型/backend_api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 就业App原型/backend_api/requirements.txt
+
+      - name: Initialize database
+        working-directory: 就业App原型/backend_api
+        run: python init_db.py
+
+      - name: Run pending inactive jobs check
+        working-directory: 就业App原型/backend_api
+        env:
+          CHECK_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'ncss24365,job51,zhilian,liepin,guopin,lagou,boss_dp,boss,chenhr,qdhr,buildhr,jobmohrss,shixiseng,rcsd_talents,sdgxbys,healthr,qingdao_rc,healthr_doctor,sdgxbys_campus,qlrc,gaoxiaojob' }}
+          CHECK_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || 500 }}
+          CHECK_TIMEOUT: ${{ github.event_name == 'workflow_dispatch' && inputs.timeout || 8.0 }}
+          CHECK_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || 8 }}
+          VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
+        run: |
+          args=()
+          if [ -n "$CHECK_SOURCES" ]; then
+            args+=(--sources "$CHECK_SOURCES")
+          fi
+          args+=(--limit "$CHECK_LIMIT")
+          args+=(--timeout "$CHECK_TIMEOUT")
+          args+=(--workers "$CHECK_WORKERS")
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            args+=(--validate-startup)
+          fi
+          python run_pending_inactive_jobs_check.py "${args[@]}"
+
+      - name: Publish check summary
+        if: always()
+        working-directory: 就业App原型/backend_api
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path("data/pending_inactive_jobs_check_last_result.json")
+          if not summary_path.exists():
+              print("pending_inactive_jobs_check_last_result.json not found; skip summary publish")
+              raise SystemExit(0)
+
+          data = json.loads(summary_path.read_text(encoding="utf-8"))
+          started_at = data.get("started_at") or "-"
+          finished_at = data.get("finished_at") or "-"
+          verified = int(data.get("verified_count") or 0)
+          restored = int(data.get("restored_count") or 0)
+          confirmed = int(data.get("confirmed_count") or 0)
+          review = int(data.get("review_count") or 0)
+          missing = int(data.get("missing_url_count") or 0)
+          blocked = int(data.get("security_check_blocked_count") or 0)
+          challenge = int(data.get("browser_challenge_count") or 0)
+          selected = data.get("selected_sources") or []
+          validate = bool(data.get("validate_startup"))
+
+          lines = [
+              "# Pending Inactive Jobs Check Summary",
+              "",
+              f"- validate_startup: {'true' if validate else 'false'}",
+              f"- verified_count: {verified}",
+              f"- restored_count (恢复上线): {restored}",
+              f"- confirmed_count (确认下线): {confirmed}",
+              f"- review_count (需人工): {review}",
+              f"- missing_url_count: {missing}",
+              f"- security_check_blocked: {blocked}",
+              f"- browser_challenge: {challenge}",
+              f"- started_at: {started_at}",
+              f"- finished_at: {finished_at}",
+              "",
+          ]
+
+          checked_sources = data.get("checked_sources") or []
+          if checked_sources:
+              lines.append("| source_code | count |")
+              lines.append("| --- | ---: |")
+              for item in checked_sources:
+                  lines.append(f"| {item.get('source_code', '-')} ({item.get('source_name', '-')}) | {item.get('count', 0)} |")
+
+          summary_text = "\n".join(lines)
+          print(summary_text)
+
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_file:
+              Path(summary_file).write_text(summary_text + "\n", encoding="utf-8")
+          PY
+
+      - name: Commit updated database and summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 就业App原型/backend_api/data/jobs.db 就业App原型/backend_api/data/pending_inactive_jobs_check_last_result.json
+          if git diff --cached --quiet; then
+            echo "No database changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update pending inactive jobs check data"
+          git push

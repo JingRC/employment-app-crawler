@@ -144,6 +144,50 @@ class CrawlerBossRouteTests(unittest.TestCase):
         self.assertTrue(result["data"]["cookie_valid"])
         self.assertEqual(result["data"]["browser_preference"], "manual")
 
+    def test_save_boss_cookie_extracts_raw_request_headers(self) -> None:
+        captured: dict[str, str] = {}
+
+        def persist_cookie_bundle(cookie_text: str, runtime_mode: str = 'requests_only') -> None:
+            captured["cookie"] = cookie_text
+            captured["runtime_mode"] = runtime_mode
+
+        def save_local_secrets(values: dict[str, str]) -> None:
+            captured.update(values)
+
+        module = type(
+            "BossModule",
+            (),
+            {
+                "persist_cookie_bundle": staticmethod(persist_cookie_bundle),
+                "save_local_secrets": staticmethod(save_local_secrets),
+                "load_local_secrets": staticmethod(lambda: {
+                    "cookie": "__zp_stoken__=abc; wt2=def; wbg=1; zp_at=ghi",
+                    "zp_token": "zp-token-value",
+                    "token": "token-value",
+                    "cookie_refreshed_at": "2026-04-07 10:00:00",
+                    "cookie_runtime_mode": "requests_only",
+                }),
+                "probe_persisted_cookie": staticmethod(lambda query, city, runtime_mode='requests_only': {
+                    "cookie_valid": True,
+                    "missing_keys": [],
+                    "validation_mode": "api_probe",
+                    "probe_code": "0",
+                    "probe_message": "ok",
+                    "message": "Boss Cookie 可用",
+                }),
+            },
+        )()
+
+        raw_headers = """GET /wapi/zpCommon/data/cityGroup.json HTTP/1.1\nHost: www.zhipin.com\nzp_token: zp-token-value\ntoken: token-value\nCookie: __zp_stoken__=abc; wt2=def; wbg=1; zp_at=ghi"""
+
+        with patch.object(crawler, "load_source_module", return_value=module):
+            result = crawler.save_boss_cookie(BossCookieManualSaveRequest(cookie_text=raw_headers))
+
+        self.assertEqual(result["code"], 0)
+        self.assertEqual(captured["cookie"], "__zp_stoken__=abc; wt2=def; wbg=1; zp_at=ghi")
+        self.assertEqual(captured["zp_token"], "zp-token-value")
+        self.assertEqual(captured["token"], "token-value")
+
     def test_save_boss_cookie_returns_error_when_invalid(self) -> None:
         module = type(
             "BossModule",

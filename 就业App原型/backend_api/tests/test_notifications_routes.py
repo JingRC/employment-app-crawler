@@ -47,7 +47,14 @@ class NotificationRouteTests(unittest.TestCase):
         self.assertEqual(result["code"], 0)
 
     def test_job_notification_timeline_forwards_job_id(self) -> None:
-        fake_result = {"items": [{"notification_id": 1, "notification_type": "job_manual_verify", "action_source": "manual_verify", "action_source_name": "手动复核", "title": "x", "content": "y", "is_read": False, "created_at": "2026-03-30 12:00:00", "related_job_id": 7, "related_company_id": 3}]}
+        fake_result = {
+            "items": [{"notification_id": 1, "notification_type": "job_manual_verify", "action_source": "manual_verify", "action_source_name": "手动复核", "title": "x", "content": "y", "is_read": False, "created_at": "2026-03-30 12:00:00", "related_job_id": 7, "related_company_id": 3}],
+            "events": [{"event_id": 9, "event_type": "salary_changed", "source_code": "boss", "source_name": "Boss直聘", "change_summary": "薪资由 10-12K 变为 15-20K", "created_at": "2026-03-30 12:00:00", "before_payload": {"salary_text": "10-12K"}, "after_payload": {"salary_text": "15-20K"}}],
+            "timeline": [
+                {"entry_kind": "notification", "created_at": "2026-03-30 12:00:00", "title": "x", "content": "y", "notification_type": "job_manual_verify", "action_source": "manual_verify", "action_source_name": "手动复核", "event_type": "", "source_code": "", "source_name": "", "is_read": False},
+                {"entry_kind": "event", "created_at": "2026-03-30 12:00:00", "title": "薪资由 10-12K 变为 15-20K", "content": "薪资由 10-12K 变为 15-20K", "notification_type": "", "action_source": "", "action_source_name": "", "event_type": "salary_changed", "source_code": "boss", "source_name": "Boss直聘", "is_read": False},
+            ],
+        }
         with patch.object(notifications, "query_job_notification_timeline", return_value=fake_result) as query_mock:
             result = notifications.get_job_notification_timeline(7, limit=10)
 
@@ -55,6 +62,26 @@ class NotificationRouteTests(unittest.TestCase):
         self.assertEqual(result["code"], 0)
         self.assertEqual(result["data"]["items"][0]["related_job_id"], 7)
         self.assertEqual(result["data"]["items"][0]["action_source_name"], "手动复核")
+        self.assertEqual(result["data"]["events"][0]["event_type"], "salary_changed")
+        self.assertEqual(result["data"]["events"][0]["source_name"], "Boss直聘")
+        self.assertEqual(result["data"]["timeline"][0]["entry_kind"], "notification")
+
+    def test_notification_stats_route_forwards_service_result(self) -> None:
+        fake_result = {"total": 12, "unread": 5}
+        with patch.object(notifications, "query_notification_stats", return_value=fake_result) as query_mock:
+            result = notifications.get_notification_stats_api()
+
+        query_mock.assert_called_once_with()
+        self.assertEqual(result["code"], 0)
+        self.assertEqual(result["data"], fake_result)
+
+    def test_mark_all_notifications_read_route_returns_affected_count(self) -> None:
+        with patch.object(notifications, "set_all_notifications_read", return_value=4) as mark_mock:
+            result = notifications.mark_all_notifications_read_api()
+
+        mark_mock.assert_called_once_with()
+        self.assertEqual(result["code"], 0)
+        self.assertEqual(result["data"], {"affected": 4})
 
 
 if __name__ == "__main__":

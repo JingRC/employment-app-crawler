@@ -48,6 +48,7 @@ class CrawlerBossDpRouteTests(unittest.TestCase):
             max_pages=1,
             page_size=30,
             runtime_mode="hybrid",
+            stale_after_hours=72,
             source_options={},
         )
         self.assertEqual(result["code"], 0)

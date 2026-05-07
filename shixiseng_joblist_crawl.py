@@ -600,7 +600,7 @@ def load_search_api_page_with_retry(
     for attempt in range(1, MAX_RETRIES + 1):
         ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
         session = build_api_session(referer)
-        response = session.get(SEARCH_API_URL, params=params, timeout=25)
+        response = session.get(SEARCH_API_URL, params=params, timeout=45)
         if response.status_code == 200:
             try:
                 payload = response.json()
@@ -643,7 +643,7 @@ def load_detail_api_with_retry(
         ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no, job_uuid=job_uuid)
         rate_limiter.wait(should_stop_callback=should_stop_callback, progress_callback=progress_callback, query=query, city_name=city_name, page=page_no, job_uuid=job_uuid)
         session = build_api_session(referer)
-        response = session.get(DETAIL_API_URL, params={"uuid": job_uuid}, timeout=25)
+        response = session.get(DETAIL_API_URL, params={"uuid": job_uuid}, timeout=45)
         if response.status_code == 200:
             try:
                 payload = response.json()
@@ -669,7 +669,7 @@ def load_detail_api_with_retry(
 
 def load_pcxz_endpoint(path: str, params: dict[str, Any] | None = None) -> Any:
     session = build_pcxz_session()
-    response = session.get(f"{PCXZ_API_BASE}/{path}", params=params or {}, timeout=25)
+    response = session.get(f"{PCXZ_API_BASE}/{path}", params=params or {}, timeout=45)
     response.raise_for_status()
     payload = response.json()
     if int(payload.get("code") or 0) != 100:
@@ -1038,7 +1038,7 @@ def load_detail_html_with_retry(
         ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no, job_uuid=job_uuid)
         rate_limiter.wait(should_stop_callback=should_stop_callback, progress_callback=progress_callback, query=query, city_name=city_name, page=page_no, job_uuid=job_uuid)
         session = build_requests_session(cookie_header, referer)
-        response = session.get(detail_url, timeout=25)
+        response = session.get(detail_url, timeout=45)
         if response.status_code == 200 and "__NUXT__=" in response.text:
             return response.text
         if attempt < MAX_RETRIES:

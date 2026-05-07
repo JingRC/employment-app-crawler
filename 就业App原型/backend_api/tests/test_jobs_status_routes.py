@@ -17,7 +17,20 @@ from app.api.routes import jobs  # noqa: E402
 
 class JobsStatusRouteTests(unittest.TestCase):
     def test_list_jobs_forwards_status(self) -> None:
-        fake_result = {"page": 1, "page_size": 20, "total": 0, "items": []}
+        fake_result = {
+            "page": 1,
+            "page_size": 20,
+            "total": 0,
+            "items": [],
+            "status_summary": {
+                "all_total": 0,
+                "active_total": 0,
+                "inactive_total": 0,
+                "inactive_pending_total": 0,
+                "inactive_confirmed_total": 0,
+                "stale_after_hours": 72,
+            },
+        }
         with patch.object(jobs, "query_jobs", return_value=fake_result) as query_mock:
             result = jobs.list_jobs(
                 keyword=None,
@@ -51,6 +64,7 @@ class JobsStatusRouteTests(unittest.TestCase):
             page_size=20,
         )
         self.assertEqual(result["code"], 0)
+        self.assertEqual(result["data"]["status_summary"]["stale_after_hours"], 72)
 
     def test_list_job_filters_forwards_status(self) -> None:
         fake_result = {"cities": [], "sources": [], "degrees": [], "experiences": [], "verification_statuses": []}

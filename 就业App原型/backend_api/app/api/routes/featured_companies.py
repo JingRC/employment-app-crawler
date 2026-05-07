@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas.featured_company import FeaturedCompanyDetail, FeaturedCompanyFilterData, FeaturedCompanyListData
-from app.services.job_service import query_featured_companies, query_featured_company_detail, query_featured_company_filter_options
+from app.services.job_service import import_dxy_job_featured_topics, import_niuke_campus_featured_topics, import_yingjiesheng_featured_topics, query_featured_companies, query_featured_company_detail, query_featured_company_filter_options
 
 router = APIRouter()
 
@@ -37,6 +37,24 @@ def list_featured_companies_api(
 def list_featured_company_filters_api() -> dict:
     data = FeaturedCompanyFilterData(**query_featured_company_filter_options())
     return {"code": 0, "message": "success", "data": data.model_dump()}
+
+
+@router.post("/import-niuke-campus")
+def import_niuke_campus_featured_companies_api() -> dict:
+    data = import_niuke_campus_featured_topics()
+    return {"code": 0, "message": "success", "data": data}
+
+
+@router.post("/import-yingjiesheng-topic")
+def import_yingjiesheng_featured_companies_api() -> dict:
+    data = import_yingjiesheng_featured_topics()
+    return {"code": 0, "message": "success", "data": data}
+
+
+@router.post("/import-dxy-job-topic")
+def import_dxy_job_featured_companies_api() -> dict:
+    data = import_dxy_job_featured_topics()
+    return {"code": 0, "message": "success", "data": data}
 
 
 @router.get("/{featured_company_id}")

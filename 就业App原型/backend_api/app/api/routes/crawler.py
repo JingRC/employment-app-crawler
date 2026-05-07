@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query
@@ -11,6 +13,134 @@ _GUOPIN_MODULE: Any | None = None
 _GUOPIN_DISTRICT_TREE_CACHE: list[dict[str, Any]] | None = None
 _GUOPIN_CITY_CACHE: list[dict[str, Any]] | None = None
 _GUOPIN_CITY_DISTRICT_CACHE: dict[str, list[dict[str, Any]]] = {}
+_BACKEND_API_DIR = Path(__file__).resolve().parents[3]
+_DATA_DIR = _BACKEND_API_DIR / "data"
+_MARKET_EXPANSION_RUNNERS = [
+    {
+        "runner_key": "priority",
+        "label": "第一波主平台扩量",
+        "summary_path": _DATA_DIR / "priority_market_expansion_last_result.json",
+        "checkpoint_path": _DATA_DIR / "priority_market_expansion_checkpoint.json",
+        "expected_phases": ["zhilian-beijing-priority", "zhilian-shanghai-priority", "job51-general", "liepin-mid-senior", "shixiseng-campus", "guopin-public"],
+    },
+    {
+        "runner_key": "followup",
+        "label": "第二波官方源与垂直源",
+        "summary_path": _DATA_DIR / "followup_market_expansion_last_result.json",
+        "checkpoint_path": _DATA_DIR / "followup_market_expansion_checkpoint.json",
+        "expected_phases": ["ncss24365-campus-official", "healthr-national-vertical", "healthr-doctor-national", "buildhr-national-cost", "chenhr-national-chemcore", "qlrc-shandong-market"],
+    },
+]
+
+
+def _load_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _derive_runner_status(summary: dict[str, Any], checkpoint: dict[str, Any]) -> str:
+    if bool(checkpoint.get("waiting_for_idle")):
+        return "waiting"
+    if bool(checkpoint.get("finished")) or bool(summary.get("finished")) or bool(summary.get("finished_at")):
+        return "finished"
+    if checkpoint:
+        return "running"
+    return "idle"
+
+
+def _normalize_phase_list(values: Any) -> list[str]:
+    return [str(item).strip() for item in (values or []) if str(item).strip()]
+
+
+def _detect_runner_key(summary: dict[str, Any], checkpoint: dict[str, Any], fallback_runner_key: str) -> str:
+    checkpoint_selected_phases = _normalize_phase_list(checkpoint.get("selected_phases"))
+    summary_selected_phases = _normalize_phase_list(summary.get("selected_phases"))
+    if checkpoint_selected_phases and (checkpoint.get("current_batch") or checkpoint.get("next_batch") or not checkpoint.get("finished", False)):
+        selected_phases = checkpoint_selected_phases
+    else:
+        selected_phases = summary_selected_phases or checkpoint_selected_phases
+    if not selected_phases:
+        return fallback_runner_key
+    selected_phase_set = set(selected_phases)
+    for runner in _MARKET_EXPANSION_RUNNERS:
+        expected_phase_set = set(_normalize_phase_list(runner.get("expected_phases") or []))
+        if expected_phase_set and selected_phase_set == expected_phase_set:
+            return str(runner["runner_key"])
+    return fallback_runner_key
+
+
+def _runner_updated_at(summary: dict[str, Any], checkpoint: dict[str, Any]) -> str:
+    return str(checkpoint.get("updated_at") or summary.get("finished_at") or summary.get("started_at") or "")
+
+
+def _build_market_expansion_runner_state() -> list[dict[str, Any]]:
+    items: dict[str, dict[str, Any]] = {
+        str(runner["runner_key"]): {
+            "runner_key": runner["runner_key"],
+            "label": runner["label"],
+            "status": "idle",
+            "summary": {},
+            "checkpoint": {},
+        }
+        for runner in _MARKET_EXPANSION_RUNNERS
+    }
+    for runner in _MARKET_EXPANSION_RUNNERS:
+        summary = _load_json_file(runner["summary_path"])
+        checkpoint = _load_json_file(runner["checkpoint_path"])
+        detected_runner_key = _detect_runner_key(summary, checkpoint, str(runner["runner_key"]))
+        current_item = items[detected_runner_key]
+        current_updated_at = _runner_updated_at(current_item.get("summary") or {}, current_item.get("checkpoint") or {})
+        candidate_updated_at = _runner_updated_at(summary, checkpoint)
+        if summary or checkpoint:
+            if not current_item.get("summary") and not current_item.get("checkpoint"):
+                should_replace = True
+            else:
+                should_replace = candidate_updated_at >= current_updated_at
+            if should_replace:
+                current_item.update(
+                    {
+                        "runner_key": detected_runner_key,
+                        "status": _derive_runner_status(summary, checkpoint),
+                        "summary": summary,
+                        "checkpoint": checkpoint,
+                    }
+                )
+    return [items[str(runner["runner_key"])] for runner in _MARKET_EXPANSION_RUNNERS]
+
+
+def _parse_manual_boss_auth_input(raw_text: str) -> dict[str, str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {"cookie": "", "zp_token": "", "token": ""}
+
+    if "\n" not in text and "\r" not in text:
+        normalized = text
+        if normalized.lower().startswith("cookie:"):
+            normalized = normalized.split(":", 1)[1].strip()
+        return {"cookie": normalized, "zp_token": "", "token": ""}
+
+    parsed = {"cookie": "", "zp_token": "", "token": ""}
+    for raw_line in text.replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        normalized_key = key.strip().lower()
+        normalized_value = value.strip()
+        if normalized_key == "cookie" and normalized_value:
+            parsed["cookie"] = normalized_value
+        elif normalized_key == "zp_token" and normalized_value:
+            parsed["zp_token"] = normalized_value
+        elif normalized_key == "token" and normalized_value:
+            parsed["token"] = normalized_value
+
+    if not parsed["cookie"]:
+        parsed["cookie"] = text
+    return parsed
 
 
 def _get_guopin_module() -> Any:
@@ -112,6 +242,11 @@ def get_crawl_sources() -> dict:
     return {"code": 0, "message": "success", "data": {"items": items}}
 
 
+@router.get("/market-expansion-runners")
+def get_market_expansion_runners() -> dict:
+    return {"code": 0, "message": "success", "data": {"items": _build_market_expansion_runner_state()}}
+
+
 @router.get("/guopin/cities")
 def get_guopin_cities() -> dict:
     return {"code": 0, "message": "success", "data": {"items": _build_guopin_city_catalog()}}
@@ -164,7 +299,7 @@ def prepare_boss_cookie(body: BossCookiePrepareRequest) -> dict:
     query = str(body.query or "Java").strip() or "Java"
     city = str(body.city or "101010100").strip() or "101010100"
     runtime_mode = str(body.runtime_mode or "requests_only").strip().lower() or "requests_only"
-    browser_preference = str(body.browser_preference or "edge").strip().lower() or "edge"
+    browser_preference = str(body.browser_preference or "chrome").strip().lower() or "chrome"
     browser_profile = str(body.browser_profile or "Default").strip() or "Default"
     login_wait_seconds = max(0, int(body.login_wait_seconds or 40))
     try:
@@ -217,15 +352,22 @@ def save_boss_cookie(body: BossCookieManualSaveRequest) -> dict:
     query = str(body.query or "Java").strip() or "Java"
     city = str(body.city or "101010100").strip() or "101010100"
     runtime_mode = str(body.runtime_mode or "requests_only").strip().lower() or "requests_only"
-    cookie_text = str(body.cookie_text or "").strip()
-    if cookie_text.lower().startswith("cookie:"):
-        cookie_text = cookie_text.split(":", 1)[1].strip()
+    manual_auth = _parse_manual_boss_auth_input(body.cookie_text)
+    cookie_text = manual_auth["cookie"]
 
     try:
         if hasattr(module, "persist_cookie_bundle"):
             module.persist_cookie_bundle(cookie_text, runtime_mode=runtime_mode)
         else:
             raise RuntimeError("当前 Boss 模块不支持手动保存 Cookie")
+        extra_secret_values = {
+            key: value for key, value in {
+                "zp_token": manual_auth.get("zp_token", ""),
+                "token": manual_auth.get("token", ""),
+            }.items() if str(value or "").strip()
+        }
+        if extra_secret_values and hasattr(module, "save_local_secrets"):
+            module.save_local_secrets(extra_secret_values)
         local = module.load_local_secrets() if hasattr(module, "load_local_secrets") else {}
         status_payload = module.probe_persisted_cookie(query=query, city=city, runtime_mode=runtime_mode) if hasattr(module, "probe_persisted_cookie") else {}
         data = BossCookiePrepareResult(

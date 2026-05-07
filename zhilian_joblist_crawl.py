@@ -33,6 +33,8 @@ BASE_URL = "https://sou.zhaopin.com/"
 DEFAULT_QUERIES = ["Python", "Java", "前端", "测试"]
 DEFAULT_CITIES = ["全国", "北京", "上海", "深圳", "广州", "杭州", "成都", "武汉", "南京", "苏州"]
 DEFAULT_WAIT_SECONDS = 8.0
+FAST_SAMPLE_CAPTURE_WAIT_SECONDS = 2.5
+FAST_SAMPLE_PACKET_TIMEOUT_SECONDS = 3.0
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 2.0
 DEFAULT_SOURCE_OPTIONS = {
@@ -59,6 +61,12 @@ CITY_ALIASES = {
 
 class CrawlCancelledError(Exception):
     pass
+
+
+class PartialCrawlError(RuntimeError):
+    def __init__(self, message: str, *, partial_result: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.partial_result = dict(partial_result or {})
 
 
 def configure_stdio() -> None:
@@ -485,7 +493,10 @@ def find_next_page_button(page: Any) -> Any:
         "tag:span@@text()=下一页",
         "tag:button@@text()=下一页",
     ]:
-        button = page.ele(locator, timeout=2)
+        try:
+            button = page.ele(locator, timeout=2)
+        except Exception:
+            button = None
         if button is not None:
             return button
     return None
@@ -500,13 +511,22 @@ def load_positions_api_page_via_click(
     should_stop_callback: Callable[[], bool] | None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None,
 ) -> dict[str, Any]:
-    page.listen.start("search/positions")
+    try:
+        page.listen.start("search/positions")
+    except Exception:
+        return {}
     button = find_next_page_button(page)
     if button is None:
         return {}
-    button.click()
-    safe_sleep(DEFAULT_WAIT_SECONDS, should_stop_callback, progress_callback, query=query, city_name=city_name, page=target_page_no)
-    packets = list(page.listen.steps(count=10, timeout=4))
+    try:
+        button.click()
+    except Exception:
+        return {}
+    try:
+        safe_sleep(DEFAULT_WAIT_SECONDS, should_stop_callback, progress_callback, query=query, city_name=city_name, page=target_page_no)
+        packets = list(page.listen.steps(count=10, timeout=4))
+    except Exception:
+        return {}
     for packet in reversed(packets):
         request = getattr(packet, "request", None)
         request_url = str(getattr(request, "url", ""))
@@ -526,6 +546,80 @@ def load_positions_api_page_via_click(
     return {}
 
 
+def load_positions_api_page_via_search_url(
+    page: Any,
+    *,
+    target_page_no: int,
+    query: str,
+    city_name: str,
+    should_stop_callback: Callable[[], bool] | None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    items, total_count, total_pages = load_search_items_with_retry(
+        page,
+        query,
+        city_name,
+        target_page_no,
+        should_stop_callback,
+        progress_callback,
+    )
+    if not items:
+        return {}
+    return {
+        "payload": {
+            "items": list(items),
+            "count": int(total_count or 0),
+            "pages": int(total_pages or 0),
+        },
+        "request_sample": {},
+        "fallback_mode": "search_url",
+    }
+
+
+def capture_positions_api_request_sample_from_search_page(
+    page: Any,
+    *,
+    query: str,
+    city_name: str,
+    page_no: int,
+    should_stop_callback: Callable[[], bool] | None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    try:
+        page.listen.start("search/positions")
+        page.get(build_search_url(query, city_name, page_no))
+        safe_sleep(
+            FAST_SAMPLE_CAPTURE_WAIT_SECONDS,
+            should_stop_callback,
+            progress_callback,
+            query=query,
+            city_name=city_name,
+            page=page_no,
+        )
+        packets = list(page.listen.steps(count=10, timeout=FAST_SAMPLE_PACKET_TIMEOUT_SECONDS))
+    except Exception:
+        return {"payload": {}, "request_sample": {}}
+    for packet in reversed(packets):
+        request = getattr(packet, "request", None)
+        request_url = str(getattr(request, "url", ""))
+        if "search/positions" not in request_url:
+            continue
+        payload = extract_positions_api_payload(packet)
+        request_sample = extract_positions_api_request_sample(
+            packet,
+            page,
+            query=query,
+            city_name=city_name,
+            page_no=page_no,
+        )
+        if request_sample:
+            return {
+                "payload": payload if isinstance(payload, dict) else {},
+                "request_sample": request_sample,
+            }
+    return {"payload": {}, "request_sample": {}}
+
+
 def load_search_items_with_retry(
     page: Any,
     query: str,
@@ -538,9 +632,22 @@ def load_search_items_with_retry(
     last_pages = 1
     for attempt in range(1, MAX_RETRIES + 1):
         ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
-        page.get(build_search_url(query, city_name, page_no))
-        safe_sleep(DEFAULT_WAIT_SECONDS, should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
-        state_payload = extract_page_payload_from_state(extract_initial_state(page))
+        try:
+            page.get(build_search_url(query, city_name, page_no))
+            safe_sleep(DEFAULT_WAIT_SECONDS, should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
+            state_payload = extract_page_payload_from_state(extract_initial_state(page))
+        except Exception as exc:
+            if attempt < MAX_RETRIES:
+                emit_progress(
+                    progress_callback,
+                    f"智联招聘 {query} - {city_name} 第 {page_no} 页加载异常，准备第 {attempt + 1} 次重试：{clean_text(exc) or exc.__class__.__name__}",
+                    query=query,
+                    city_name=city_name,
+                    page=page_no,
+                )
+                safe_sleep(retry_delay(attempt), should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
+                continue
+            return [], last_count, last_pages
         items = list(state_payload["items"])
         last_count = int(state_payload["count"])
         last_pages = int(state_payload["pages"])
@@ -577,6 +684,134 @@ def build_job_url(item: dict[str, Any]) -> str:
     if job_id:
         return f"https://www.zhaopin.com/jobdetail/{job_id}.htm"
     return ""
+
+
+def build_dom_source_job_id(detail_url: str, title: str, company_name: str) -> str:
+    normalized_url = clean_text(detail_url)
+    if normalized_url:
+        parsed = urlsplit(normalized_url)
+        path = clean_text(parsed.path).rstrip("/")
+        if path:
+            candidate = path.split("/")[-1].removesuffix(".htm").removesuffix(".html")
+            if candidate and candidate.lower() not in {"jobdetail", "detail"}:
+                return candidate
+        query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        for key in ("jobId", "jobid", "positionId", "position_id", "number"):
+            value = clean_text(query_params.get(key))
+            if value:
+                return value
+    seed = "|".join(part for part in [clean_text(title), clean_text(company_name), normalized_url] if part)
+    if not seed:
+        return ""
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+
+
+def normalize_dom_job_item(item: dict[str, Any], *, query: str) -> dict[str, Any]:
+    title = clean_text(item.get("title"))
+    company_name = clean_text(item.get("company_name"))
+    address_text = clean_text(item.get("address"))
+    city_name = clean_text(item.get("city_name"))
+    district_name = clean_text(item.get("district_name"))
+    if address_text and not city_name:
+        address_parts = [clean_text(part) for part in address_text.split("·") if clean_text(part)]
+        if address_parts:
+            city_name = address_parts[0]
+        if len(address_parts) > 1 and not district_name:
+            district_name = address_parts[1]
+
+    job_type_parts: list[str] = []
+    work_tag = clean_text(item.get("work_tag"))
+    if work_tag:
+        job_type_parts.append(work_tag)
+    for extra_tag in item.get("job_tags") or []:
+        tag_text = clean_text(extra_tag)
+        if tag_text and tag_text not in job_type_parts:
+            job_type_parts.append(tag_text)
+    if clean_text(query) and clean_text(query) not in job_type_parts:
+        job_type_parts.append(clean_text(query))
+
+    description_parts: list[str] = []
+    if work_tag:
+        description_parts.append(f"技能标签：{work_tag}")
+    company_business = clean_text(item.get("company_business"))
+    if company_business:
+        description_parts.append(f"公司业务：{company_business}")
+    company_url = clean_text(item.get("company_url"))
+    if company_url:
+        description_parts.append(f"公司链接：{company_url}")
+
+    detail_url = clean_text(item.get("detail_url"))
+    return {
+        "source_job_id": build_dom_source_job_id(detail_url, title, company_name),
+        "title": title,
+        "company_name": company_name,
+        "city_name": city_name,
+        "district_name": district_name,
+        "salary_text": clean_text(item.get("salary_text")),
+        "degree_text": clean_text(item.get("degree_text")),
+        "experience_text": clean_text(item.get("experience_text")),
+        "brand_scale": clean_text(item.get("company_people")),
+        "brand_stage": clean_text(item.get("company_state")),
+        "job_type": " / ".join(job_type_parts),
+        "source_url": detail_url,
+        "official_apply_url": detail_url,
+        "description_text": "\n\n".join(part for part in description_parts if part),
+        "source_code": "zhilian",
+        "status": "active",
+    }
+
+
+def extract_jobs_from_dom_page(page: Any, *, query: str) -> list[dict[str, Any]]:
+    payload = page.run_js(
+    r"""
+const normalize = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+const textList = (node, selector) => Array.from(node.querySelectorAll(selector)).map((item) => normalize(item.textContent)).filter(Boolean);
+const candidates = Array.from(document.querySelectorAll('#positionList-hook div')).filter((node) => {
+  return node.querySelector('.jobinfo__top a') && node.querySelector('.companyinfo__top a');
+});
+const cards = candidates.filter((node) => !candidates.some((other) => other !== node && node.contains(other)));
+return cards.map((card) => {
+  const titleLink = card.querySelector('.jobinfo__top a') || card.querySelector('a[href*="jobdetail"]') || card.querySelector('a[href*="jobs.zhaopin.com"]');
+  const companyLink = card.querySelector('.companyinfo__top a');
+  const salaryNode = card.querySelector('.jobinfo__top p') || card.querySelector('[class*="salary"]');
+  const addressNode = card.querySelector('.jobinfo__other-info-item span') || card.querySelector('.jobinfo__other-info-item') || card.querySelector('.jobinfo__other-info > div:first-child');
+  const otherInfo = textList(card, '.jobinfo__other-info > div, .jobinfo__other-info-item');
+  const companyTags = textList(card, '.companyinfo__tag > div, .companyinfo__tag span');
+  const jobTags = textList(card, '.jobinfo__tag > div, .jobinfo__tag span');
+  const logo = card.querySelector('.companyinfo__logo img');
+  const address = normalize(addressNode ? addressNode.textContent : (otherInfo[0] || ''));
+  const addressParts = address.split('·').map((item) => normalize(item)).filter(Boolean);
+  return {
+    title: normalize(titleLink ? titleLink.textContent : ''),
+    company_name: normalize(companyLink ? companyLink.textContent : ''),
+    work_tag: jobTags.join(' / '),
+    job_tags: jobTags,
+    address,
+    city_name: addressParts[0] || '',
+    district_name: addressParts[1] || '',
+    experience_text: normalize(otherInfo[1] || ''),
+    degree_text: normalize(otherInfo[2] || ''),
+    company_state: normalize(companyTags[0] || ''),
+    company_people: normalize(companyTags[1] || ''),
+    company_business: normalize(companyTags[2] || ''),
+    salary_text: normalize(salaryNode ? salaryNode.textContent : ''),
+    company_logo: normalize(logo ? (logo.getAttribute('src') || '') : ''),
+    company_url: normalize(companyLink ? (companyLink.href || companyLink.getAttribute('href') || '') : ''),
+    detail_url: normalize(titleLink ? (titleLink.href || titleLink.getAttribute('href') || '') : ''),
+  };
+}).filter((item) => item.title && item.company_name);
+"""
+    )
+    if not isinstance(payload, list):
+        return []
+    jobs: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        normalized = normalize_dom_job_item(item, query=query)
+        if clean_text(normalized.get("source_job_id")) and clean_text(normalized.get("title")) and clean_text(normalized.get("company_name")):
+            jobs.append(normalized)
+    return jobs
 
 
 def normalize_job_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -795,6 +1030,24 @@ def run_incremental_update(
     temp_user_data_path = str(getattr(options, "_copilot_temp_user_data_path", "") or "")
     page = ChromiumPage(options)
     try:
+        def build_partial_result() -> dict[str, Any]:
+            return {
+                "total_fetched": total_fetched,
+                "new_to_db": total_new,
+                "updated": total_updated,
+                "queries": len(normalized_queries),
+                "cities": len(normalized_cities),
+                "runtime_mode": "browser",
+                "detail_mode": "intercept_api",
+                "resolved_city_codes": dict(resolved_city_codes),
+                "request_probe_attempts": request_probe_attempts,
+                "request_probe_successes": request_probe_successes,
+                "request_page_attempts": request_page_attempts,
+                "request_page_successes": request_page_successes,
+                "captured_request_samples": len(request_samples),
+                "zhilian_request_trace": list(zhilian_request_trace),
+            }
+
         emit_progress(progress_callback, "智联招聘采集启动，模式 browser_intercept_api")
         for query in normalized_queries:
             for city_name in normalized_cities:
@@ -808,89 +1061,53 @@ def run_incremental_update(
                 pages_completed = 0
                 stop_reason = ""
                 captured_request_sample = False
-                ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=1)
-                emit_progress(progress_callback, f"智联招聘开始抓取 {query} - {city_name} 第 1 页", query=query, city_name=city_name, page=1)
-                list_items, total_items, total_pages = load_search_items_with_retry(
-                    page,
-                    query,
-                    city_name,
-                    1,
-                    should_stop_callback,
-                    progress_callback,
-                )
-                first_state_payload = extract_page_payload_from_state(extract_initial_state(page))
-                if first_state_payload.get("city_code"):
-                    resolved_city_codes[city_name] = str(first_state_payload["city_code"])
-                for page_no in range(1, target_pages + 1):
-                    ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
-                    if page_no > 1:
-                        emit_progress(progress_callback, f"智联招聘开始抓取 {query} - {city_name} 第 {page_no} 页", query=query, city_name=city_name, page=page_no)
-                        request_sample_key = f"{query}|{city_name}"
-                        api_result: dict[str, Any] = {}
-                        request_sample = request_samples.get(request_sample_key) or {}
-                        if page_no > 2 and request_sample and normalized_source_options["prefer_request_pages"]:
-                            request_page_attempts += 1
-                            city_request_page_attempts += 1
-                            api_result = load_positions_api_page_via_request_sample(
-                                request_sample,
-                                target_page_no=page_no,
-                                timeout_seconds=float(normalized_source_options["probe_timeout_seconds"]),
-                            )
-                            api_payload = api_result.get("payload") if isinstance(api_result, dict) else {}
-                            if api_payload.get("items"):
-                                request_page_successes += 1
-                                city_request_page_successes += 1
-                                request_samples[request_sample_key] = api_result.get("request_sample") or request_sample
-                                emit_progress(
-                                    progress_callback,
-                                    f"智联招聘 {query} - {city_name} 第 {page_no} 页 requests 直连成功",
-                                    query=query,
-                                    city_name=city_name,
-                                    page=page_no,
-                                )
-                            else:
-                                emit_progress(
-                                    progress_callback,
-                                    (
-                                        f"智联招聘 {query} - {city_name} 第 {page_no} 页 requests 直连失败，"
-                                        f"回退浏览器：{clean_text(api_result.get('reason')) or '未返回职位'}"
-                                    ),
-                                    query=query,
-                                    city_name=city_name,
-                                    page=page_no,
-                                )
-                                api_result = {}
-                        if not api_result:
-                            api_result = load_positions_api_page_via_click(
-                                page,
-                                target_page_no=page_no,
+                try:
+                    ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=1)
+                    emit_progress(progress_callback, f"智联招聘开始抓取 {query} - {city_name} 第 1 页", query=query, city_name=city_name, page=1)
+                    list_items, total_items, total_pages = load_search_items_with_retry(
+                        page,
+                        query,
+                        city_name,
+                        1,
+                        should_stop_callback,
+                        progress_callback,
+                    )
+                    first_state_payload = extract_page_payload_from_state(extract_initial_state(page))
+                    if first_state_payload.get("city_code"):
+                        resolved_city_codes[city_name] = str(first_state_payload["city_code"])
+                    request_sample_key = f"{query}|{city_name}"
+                    if target_pages > 1 and normalized_source_options["prefer_request_pages"]:
+                        initial_sample_result = capture_positions_api_request_sample_from_search_page(
+                            page,
+                            query=query,
+                            city_name=city_name,
+                            page_no=1,
+                            should_stop_callback=should_stop_callback,
+                            progress_callback=progress_callback,
+                        )
+                        initial_request_sample = initial_sample_result.get("request_sample") if isinstance(initial_sample_result.get("request_sample"), dict) else {}
+                        if initial_request_sample:
+                            captured_request_sample = True
+                            request_samples[request_sample_key] = initial_request_sample
+                            initial_payload = initial_sample_result.get("payload") if isinstance(initial_sample_result.get("payload"), dict) else {}
+                            if initial_payload.get("count"):
+                                total_items = int(initial_payload["count"])
+                            if initial_payload.get("pages"):
+                                total_pages = int(initial_payload["pages"])
+                            emit_progress(
+                                progress_callback,
+                                f"智联招聘 {query} - {city_name} 首屏请求样本捕获成功，后续页优先走 requests 直连",
                                 query=query,
                                 city_name=city_name,
-                                should_stop_callback=should_stop_callback,
-                                progress_callback=progress_callback,
+                                page=1,
                             )
-                        api_payload = api_result.get("payload") if isinstance(api_result, dict) else {}
-                        if api_payload.get("items"):
-                            list_items = list(api_payload["items"])
-                            if api_payload.get("count"):
-                                total_items = int(api_payload["count"])
-                            if api_payload.get("pages"):
-                                total_pages = int(api_payload["pages"])
-                            request_sample = api_result.get("request_sample") if isinstance(api_result, dict) else {}
-                            if request_sample:
-                                captured_request_sample = True
-                                request_samples[request_sample_key] = request_sample
                             probe_key = (query, city_name)
-                            if (
-                                request_sample
-                                and normalized_source_options["enable_request_probe"]
-                                and probe_key not in probed_keys
-                            ):
+                            if normalized_source_options["enable_request_probe"] and probe_key not in probed_keys:
                                 probed_keys.add(probe_key)
                                 request_probe_attempts += 1
                                 city_request_probe_attempts += 1
                                 probe_result = replay_positions_api_sample(
-                                    request_sample,
+                                    initial_request_sample,
                                     timeout_seconds=float(normalized_source_options["probe_timeout_seconds"]),
                                 )
                                 if probe_result.get("ok"):
@@ -898,10 +1115,41 @@ def run_incremental_update(
                                     city_request_probe_successes += 1
                                     emit_progress(
                                         progress_callback,
-                                        (
-                                            f"智联招聘 {query} - {city_name} requests 复放探针成功："
-                                            f"第 {page_no} 页样本可复放，返回 {probe_result.get('items', 0)} 条"
-                                        ),
+                                        f"智联招聘 {query} - {city_name} 首屏 requests 复放探针成功：返回 {probe_result.get('items', 0)} 条",
+                                        query=query,
+                                        city_name=city_name,
+                                        page=1,
+                                    )
+                                else:
+                                    emit_progress(
+                                        progress_callback,
+                                        f"智联招聘 {query} - {city_name} 首屏 requests 复放探针失败：{clean_text(probe_result.get('reason')) or '未返回职位'}",
+                                        query=query,
+                                        city_name=city_name,
+                                        page=1,
+                                    )
+                    for page_no in range(1, target_pages + 1):
+                        ensure_not_cancelled(should_stop_callback, progress_callback, query=query, city_name=city_name, page=page_no)
+                        if page_no > 1:
+                            emit_progress(progress_callback, f"智联招聘开始抓取 {query} - {city_name} 第 {page_no} 页", query=query, city_name=city_name, page=page_no)
+                            api_result: dict[str, Any] = {}
+                            request_sample = request_samples.get(request_sample_key) or {}
+                            if request_sample and normalized_source_options["prefer_request_pages"]:
+                                request_page_attempts += 1
+                                city_request_page_attempts += 1
+                                api_result = load_positions_api_page_via_request_sample(
+                                    request_sample,
+                                    target_page_no=page_no,
+                                    timeout_seconds=float(normalized_source_options["probe_timeout_seconds"]),
+                                )
+                                api_payload = api_result.get("payload") if isinstance(api_result.get("payload"), dict) else {}
+                                if api_payload.get("items"):
+                                    request_page_successes += 1
+                                    city_request_page_successes += 1
+                                    request_samples[request_sample_key] = api_result.get("request_sample") or request_sample
+                                    emit_progress(
+                                        progress_callback,
+                                        f"智联招聘 {query} - {city_name} 第 {page_no} 页 requests 直连成功",
                                         query=query,
                                         city_name=city_name,
                                         page=page_no,
@@ -910,69 +1158,207 @@ def run_incremental_update(
                                     emit_progress(
                                         progress_callback,
                                         (
-                                            f"智联招聘 {query} - {city_name} requests 复放探针失败："
-                                            f"{clean_text(probe_result.get('reason')) or '未返回职位'}"
+                                            f"智联招聘 {query} - {city_name} 第 {page_no} 页 requests 直连失败，"
+                                            f"回退浏览器：{clean_text(api_result.get('reason')) or '未返回职位'}"
                                         ),
                                         query=query,
                                         city_name=city_name,
                                         page=page_no,
                                     )
-                        else:
-                            state_payload = extract_page_payload_from_state(extract_initial_state(page))
-                            list_items = list(state_payload["items"])
-                            if state_payload.get("count"):
-                                total_items = int(state_payload["count"])
-                            if state_payload.get("pages"):
-                                total_pages = int(state_payload["pages"])
-                    if not list_items:
-                        stop_reason = "empty"
-                        emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页未解析到职位", query=query, city_name=city_name, page=page_no)
-                        break
+                                    api_result = {}
+                            if not api_result:
+                                api_result = load_positions_api_page_via_click(
+                                    page,
+                                    target_page_no=page_no,
+                                    query=query,
+                                    city_name=city_name,
+                                    should_stop_callback=should_stop_callback,
+                                    progress_callback=progress_callback,
+                                )
+                            api_payload = api_result.get("payload") if isinstance(api_result.get("payload"), dict) else {}
+                            if not api_payload.get("items"):
+                                api_result = load_positions_api_page_via_search_url(
+                                    page,
+                                    target_page_no=page_no,
+                                    query=query,
+                                    city_name=city_name,
+                                    should_stop_callback=should_stop_callback,
+                                    progress_callback=progress_callback,
+                                )
+                                api_payload = api_result.get("payload") if isinstance(api_result.get("payload"), dict) else {}
+                                if api_payload.get("items"):
+                                    emit_progress(
+                                        progress_callback,
+                                        f"智联招聘 {query} - {city_name} 第 {page_no} 页直接 URL 回退成功",
+                                        query=query,
+                                        city_name=city_name,
+                                        page=page_no,
+                                    )
+                            if api_payload.get("items"):
+                                list_items = list(api_payload["items"])
+                                if api_payload.get("count"):
+                                    total_items = int(api_payload["count"])
+                                if api_payload.get("pages"):
+                                    total_pages = int(api_payload["pages"])
+                                request_sample = api_result.get("request_sample") if isinstance(api_result, dict) else {}
+                                if request_sample:
+                                    captured_request_sample = True
+                                    request_samples[request_sample_key] = request_sample
+                                probe_key = (query, city_name)
+                                if (
+                                    request_sample
+                                    and normalized_source_options["enable_request_probe"]
+                                    and probe_key not in probed_keys
+                                ):
+                                    probed_keys.add(probe_key)
+                                    request_probe_attempts += 1
+                                    city_request_probe_attempts += 1
+                                    probe_result = replay_positions_api_sample(
+                                        request_sample,
+                                        timeout_seconds=float(normalized_source_options["probe_timeout_seconds"]),
+                                    )
+                                    if probe_result.get("ok"):
+                                        request_probe_successes += 1
+                                        city_request_probe_successes += 1
+                                        emit_progress(
+                                            progress_callback,
+                                            (
+                                                f"智联招聘 {query} - {city_name} requests 复放探针成功："
+                                                f"第 {page_no} 页样本可复放，返回 {probe_result.get('items', 0)} 条"
+                                            ),
+                                            query=query,
+                                            city_name=city_name,
+                                            page=page_no,
+                                        )
+                                    else:
+                                        emit_progress(
+                                            progress_callback,
+                                            (
+                                                f"智联招聘 {query} - {city_name} requests 复放探针失败："
+                                                f"{clean_text(probe_result.get('reason')) or '未返回职位'}"
+                                            ),
+                                            query=query,
+                                            city_name=city_name,
+                                            page=page_no,
+                                        )
+                            else:
+                                state_payload = extract_page_payload_from_state(extract_initial_state(page))
+                                list_items = list(state_payload["items"])
+                                if state_payload.get("count"):
+                                    total_items = int(state_payload["count"])
+                                if state_payload.get("pages"):
+                                    total_pages = int(state_payload["pages"])
+                        page_jobs: list[dict[str, Any]] = []
+                        used_dom_fallback = False
+                        if not list_items:
+                            page_jobs = extract_jobs_from_dom_page(page, query=query)[:target_page_size]
+                            used_dom_fallback = bool(page_jobs)
+                            if used_dom_fallback:
+                                emit_progress(
+                                    progress_callback,
+                                    f"智联招聘 {query} - {city_name} 第 {page_no} 页 DOM 回退成功：解析 {len(page_jobs)} 条",
+                                    query=query,
+                                    city_name=city_name,
+                                    page=page_no,
+                                )
 
-                    page_signature = (query, city_name, "|".join(clean_text(item.get("jobId") or item.get("number")) for item in list_items[:5]))
-                    if page_signature in seen_page_signatures:
-                        stop_reason = "duplicate_page"
-                        emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页出现重复分页签名，提前结束", query=query, city_name=city_name, page=page_no)
-                        break
-                    seen_page_signatures.add(page_signature)
+                        if not list_items and not page_jobs:
+                            stop_reason = "empty"
+                            emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页未解析到职位", query=query, city_name=city_name, page=page_no)
+                            break
 
-                    page_jobs = [normalize_job_item(item) for item in list_items[:target_page_size]]
-                    page_jobs = [job for job in page_jobs if clean_text(job.get("title")) and clean_text(job.get("company_name"))]
-                    if not page_jobs:
-                        stop_reason = "empty_normalized"
-                        emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页没有可入库职位", query=query, city_name=city_name, page=page_no)
-                        break
+                        if not page_jobs:
+                            page_jobs = [normalize_job_item(item) for item in list_items[:target_page_size]]
+                            page_jobs = [job for job in page_jobs if clean_text(job.get("title")) and clean_text(job.get("company_name"))]
+                            if not page_jobs:
+                                page_jobs = extract_jobs_from_dom_page(page, query=query)[:target_page_size]
+                                used_dom_fallback = bool(page_jobs)
+                                if used_dom_fallback:
+                                    emit_progress(
+                                        progress_callback,
+                                        f"智联招聘 {query} - {city_name} 第 {page_no} 页标准结构为空，DOM 回退成功：解析 {len(page_jobs)} 条",
+                                        query=query,
+                                        city_name=city_name,
+                                        page=page_no,
+                                    )
 
-                    all_seen_before_page = all(clean_text(job.get("source_job_id")) in seen_job_ids for job in page_jobs)
-                    stats = save_to_db(page_jobs, source_code="zhilian")
-                    total_fetched += len(page_jobs)
-                    total_new += stats["new"]
-                    total_updated += stats["updated"]
-                    city_fetched += len(page_jobs)
-                    city_new += stats["new"]
-                    city_updated += stats["updated"]
-                    pages_completed += 1
-                    seen_job_ids.update(clean_text(job.get("source_job_id")) for job in page_jobs if clean_text(job.get("source_job_id")))
-                    emit_progress(
-                        progress_callback,
-                        f"智联招聘 {query} - {city_name} 第 {page_no} 页完成：抓取 {len(page_jobs)} / 总数 {total_items}，新增 {stats['new']}，更新 {stats['updated']}",
-                        query=query,
-                        city_name=city_name,
-                        page=page_no,
+                        signature_parts = [
+                            clean_text(job.get("source_job_id") or job.get("title") or job.get("source_url"))
+                            for job in page_jobs[:5]
+                            if clean_text(job.get("source_job_id") or job.get("title") or job.get("source_url"))
+                        ]
+                        if not signature_parts:
+                            signature_parts = [clean_text(item.get("jobId") or item.get("number")) for item in list_items[:5]]
+                        page_signature = (query, city_name, "|".join(signature_parts))
+                        if page_signature in seen_page_signatures:
+                            stop_reason = "duplicate_page"
+                            emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页出现重复分页签名，提前结束", query=query, city_name=city_name, page=page_no)
+                            break
+                        seen_page_signatures.add(page_signature)
+
+                        if not page_jobs:
+                            stop_reason = "empty_normalized"
+                            emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页没有可入库职位", query=query, city_name=city_name, page=page_no)
+                            break
+
+                        all_seen_before_page = all(clean_text(job.get("source_job_id")) in seen_job_ids for job in page_jobs)
+                        stats = save_to_db(page_jobs, source_code="zhilian")
+                        total_fetched += len(page_jobs)
+                        total_new += stats["new"]
+                        total_updated += stats["updated"]
+                        city_fetched += len(page_jobs)
+                        city_new += stats["new"]
+                        city_updated += stats["updated"]
+                        pages_completed += 1
+                        seen_job_ids.update(clean_text(job.get("source_job_id")) for job in page_jobs if clean_text(job.get("source_job_id")))
+                        emit_progress(
+                            progress_callback,
+                            f"智联招聘 {query} - {city_name} 第 {page_no} 页完成：抓取 {len(page_jobs)} / 总数 {total_items}，新增 {stats['new']}，更新 {stats['updated']}",
+                            query=query,
+                            city_name=city_name,
+                            page=page_no,
+                        )
+
+                        if page_no >= max(1, total_pages):
+                            stop_reason = "end_page"
+                            emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 已到最后一页，共 {total_pages} 页", query=query, city_name=city_name, page=page_no)
+                            break
+                        if city_fetched >= total_items > 0:
+                            stop_reason = "covered_total"
+                            emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 已覆盖该检索结果总数 {total_items}", query=query, city_name=city_name, page=page_no)
+                            break
+                        if all_seen_before_page:
+                            stop_reason = "all_seen"
+                            emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页全部为已处理职位，提前结束", query=query, city_name=city_name, page=page_no)
+                            break
+                except CrawlCancelledError:
+                    raise
+                except Exception as exc:
+                    stop_reason = stop_reason or "exception"
+                    zhilian_request_trace.append(
+                        {
+                            "query": query,
+                            "location_name": city_name,
+                            "city_code": str(resolved_city_codes.get(city_name) or ""),
+                            "status": stop_reason,
+                            "pages_completed": pages_completed,
+                            "total_items": int(locals().get("total_items", 0) or 0),
+                            "fetched_count": city_fetched,
+                            "new_count": city_new,
+                            "updated_count": city_updated,
+                            "request_probe_attempts": city_request_probe_attempts,
+                            "request_probe_successes": city_request_probe_successes,
+                            "request_page_attempts": city_request_page_attempts,
+                            "request_page_successes": city_request_page_successes,
+                            "captured_request_sample": captured_request_sample,
+                            "failure_reason": clean_text(exc),
+                        }
                     )
-
-                    if page_no >= max(1, total_pages):
-                        stop_reason = "end_page"
-                        emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 已到最后一页，共 {total_pages} 页", query=query, city_name=city_name, page=page_no)
-                        break
-                    if city_fetched >= total_items > 0:
-                        stop_reason = "covered_total"
-                        emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 已覆盖该检索结果总数 {total_items}", query=query, city_name=city_name, page=page_no)
-                        break
-                    if all_seen_before_page:
-                        stop_reason = "all_seen"
-                        emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 第 {page_no} 页全部为已处理职位，提前结束", query=query, city_name=city_name, page=page_no)
-                        break
+                    emit_progress(progress_callback, f"智联招聘 {query} - {city_name} 中断：{clean_text(exc) or '未知错误'}", query=query, city_name=city_name, page=max(1, pages_completed))
+                    raise PartialCrawlError(
+                        f"智联招聘部分抓取失败：{query} - {city_name} - {clean_text(exc) or exc.__class__.__name__}",
+                        partial_result=build_partial_result(),
+                    ) from exc
 
                 if not stop_reason:
                     stop_reason = "target_pages_reached"
@@ -996,22 +1382,7 @@ def run_incremental_update(
                 )
 
         emit_progress(progress_callback, f"智联招聘采集完成：抓取 {total_fetched} 条，新增 {total_new} 条，更新 {total_updated} 条")
-        return {
-            "total_fetched": total_fetched,
-            "new_to_db": total_new,
-            "updated": total_updated,
-            "queries": len(normalized_queries),
-            "cities": len(normalized_cities),
-            "runtime_mode": "browser",
-            "detail_mode": "intercept_api",
-            "resolved_city_codes": resolved_city_codes,
-            "request_probe_attempts": request_probe_attempts,
-            "request_probe_successes": request_probe_successes,
-            "request_page_attempts": request_page_attempts,
-            "request_page_successes": request_page_successes,
-            "captured_request_samples": len(request_samples),
-            "zhilian_request_trace": zhilian_request_trace,
-        }
+        return build_partial_result()
     finally:
         try:
             page.quit()

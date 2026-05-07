@@ -78,7 +78,7 @@ class CrawlerServiceTests(unittest.TestCase):
                 "limit": 5,
                 "timeout_seconds": 6.0,
             },
-        ), patch.object(
+        ) as verify_mock, patch.object(
             crawler_service,
             "set_job_stale_hours",
         ), patch.object(
@@ -97,6 +97,7 @@ class CrawlerServiceTests(unittest.TestCase):
             crawler_service._run_incremental_crawl("task-mixed-1", config)
 
         status = crawler_service.get_crawl_status()
+        verify_mock.assert_called_once_with(source_codes=["boss", "shixiseng"])
         self.assertEqual(status["status"], "success")
         self.assertIn("检测下架 2 条", status["message"])
         self.assertIn("强校验恢复 1 条", status["message"])
@@ -109,6 +110,7 @@ class CrawlerServiceTests(unittest.TestCase):
         self.assertEqual(status["last_result"]["offline_missing_url_count"], 0)
         self.assertEqual(status["last_result"]["offline_strong_check_limit"], 5)
         self.assertEqual(status["last_result"]["offline_strong_check_timeout_seconds"], 6.0)
+        self.assertEqual(status["last_result"]["offline_strong_check_sources"], [])
         self.assertEqual(status["last_result"]["source_details"]["boss"]["boss_summary"]["trace_count"], 1)
         self.assertEqual(status["last_result"]["source_details"]["shixiseng"]["shixiseng_summary"]["trace_count"], 1)
         self.assertEqual(status["logs"][1]["source_code"], "boss")

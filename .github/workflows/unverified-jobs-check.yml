@@ -1,0 +1,152 @@
+name: unverified-jobs-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: Comma-separated source codes. Use none to skip all sources.
+        required: false
+        default: ncss24365,job51,liepin,zhilian,boss_dp,boss,guopin,shixiseng,chenhr,qdhr,buildhr,jobmohrss,healthr,healthr_doctor,qingdao_rc,sdgxbys,sdgxbys_campus,qlrc,rcsd_talents,wuba,lagou,niuke_campus,yingjiesheng,dxy_job,gaoxiaojob,jobonline,jxhg_chenhr,mhg_chenhr,sysh_chenhr,newenergy_chenhr,sales_chenhr,doctor_healthr,pha_healthr,env_buildhr,construct_buildhr
+      validate_startup:
+        description: Only validate startup, database initialization, and summary writing.
+        required: false
+        type: boolean
+        default: false
+      limit:
+        description: Max jobs to verify per run.
+        required: false
+        type: number
+        default: 200
+      workers:
+        description: Number of parallel workers for URL verification.
+        required: false
+        type: number
+        default: 8
+      timeout:
+        description: Timeout per URL request in seconds.
+        required: false
+        type: number
+        default: 8.0
+  schedule:
+    - cron: '37 4,12,20 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-maintenance-db-write
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            就业App原型/backend_api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 就业App原型/backend_api/requirements.txt
+
+      - name: Initialize database
+        working-directory: 就业App原型/backend_api
+        run: python init_db.py
+
+      - name: Run unverified jobs check
+        working-directory: 就业App原型/backend_api
+        env:
+          CHECK_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'ncss24365,job51,liepin,zhilian,boss_dp,guopin,shixiseng,chenhr,qdhr,buildhr,jobmohrss,healthr,healthr_doctor,qingdao_rc,sdgxbys,qlrc,rcsd_talents,wuba,gaoxiaojob' }}
+          CHECK_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || 200 }}
+          CHECK_TIMEOUT: ${{ github.event_name == 'workflow_dispatch' && inputs.timeout || 8.0 }}
+          CHECK_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || 8 }}
+          VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
+        run: |
+          args=()
+          if [ -n "$CHECK_SOURCES" ]; then
+            args+=(--sources "$CHECK_SOURCES")
+          fi
+          args+=(--limit "$CHECK_LIMIT")
+          args+=(--timeout "$CHECK_TIMEOUT")
+          args+=(--workers "$CHECK_WORKERS")
+          if [ "$VALIDATE_STARTUP" = "true" ]; then
+            args+=(--validate-startup)
+          fi
+          python run_unverified_jobs_check.py "${args[@]}"
+
+      - name: Publish check summary
+        if: always()
+        working-directory: 就业App原型/backend_api
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path("data/unverified_jobs_check_last_result.json")
+          if not summary_path.exists():
+              print("unverified_jobs_check_last_result.json not found; skip summary publish")
+              raise SystemExit(0)
+
+          data = json.loads(summary_path.read_text(encoding="utf-8"))
+          started_at = data.get("started_at") or "-"
+          finished_at = data.get("finished_at") or "-"
+          checked = int(data.get("checked_count") or 0)
+          confirmed_offline = int(data.get("confirmed_offline_count") or 0)
+          still_online = int(data.get("still_online_count") or 0)
+          candidate = int(data.get("candidate_count") or 0)
+          selected = data.get("selected_sources") or []
+          validate = bool(data.get("validate_startup"))
+
+          lines = [
+              "# Unverified Jobs Check Summary",
+              "",
+              f"- validate_startup: {'true' if validate else 'false'}",
+              f"- candidate_count: {candidate}",
+              f"- checked_count: {checked}",
+              f"- confirmed_offline: {confirmed_offline}",
+              f"- still_online: {still_online}",
+              f"- selected_sources: {', '.join(selected) if selected else 'none'}",
+              f"- started_at: {started_at}",
+              f"- finished_at: {finished_at}",
+              "",
+          ]
+
+          checked_sources = data.get("checked_sources") or []
+          if checked_sources:
+              lines.append("| source_code | count |")
+              lines.append("| --- | ---: |")
+              for item in checked_sources:
+                  lines.append(f"| {item.get('source_code', '-')} ({item.get('source_name', '-')}) | {item.get('count', 0)} |")
+
+          summary_text = "\n".join(lines)
+          print(summary_text)
+
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_file:
+              Path(summary_file).write_text(summary_text + "\n", encoding="utf-8")
+          PY
+
+      - name: Commit updated database and summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 就业App原型/backend_api/data/jobs.db 就业App原型/backend_api/data/unverified_jobs_check_last_result.json
+          if git diff --cached --quiet; then
+            echo "No database changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update unverified jobs check data"
+          git push

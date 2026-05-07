@@ -25,7 +25,7 @@ DEFAULT_SOURCE_OPTIONS = {
     "api_page_size": 50,
     "district_targets": [],
     "use_district_targets_only": False,
-    "request_timeout_seconds": 15.0,
+    "request_timeout_seconds": 30.0,
 }
 REQUEST_HEADERS = {
     "Origin": WEB_BASE_URL,

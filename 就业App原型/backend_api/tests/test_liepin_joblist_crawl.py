@@ -174,6 +174,95 @@ class LiepinJoblistCrawlTests(unittest.TestCase):
             ],
         )
 
+    def test_run_incremental_update_prefers_request_sample_for_following_pages(self) -> None:
+        first_payload = {
+            "items": [{"jobId": "job-1"}],
+            "request_sample": {"url": "https://example.com/liepin-api", "post_data": {"data": {"mainSearchPcConditionForm": {"currentPage": 1}}}},
+        }
+        second_payload = {
+            "items": [{"jobId": "job-2"}],
+            "request_sample": {"url": "https://example.com/liepin-api", "post_data": {"data": {"mainSearchPcConditionForm": {"currentPage": 2}}}},
+        }
+
+        with patch.object(liepin, "ensure_db"), patch.object(liepin, "build_browser_options", return_value=object()), patch.object(
+            liepin, "ChromiumPage", DummyPage
+        ), patch.object(
+            liepin,
+            "capture_current_page_payload",
+            side_effect=lambda *args, **kwargs: kwargs["resolved_city_entries"].update({"北京": {"code": "010", "name": "北京", "search_url": "https://www.liepin.com/city-beijing/"}}) or kwargs["footer_city_pages"].update({"北京": "https://www.liepin.com/city-beijing/"}) or first_payload,
+        ), patch.object(
+            liepin, "load_page_via_request_sample", return_value=second_payload
+        ), patch.object(
+            liepin, "load_page_via_click", side_effect=AssertionError("should not click when request sample is available")
+        ), patch.object(
+            liepin, "replay_list_api_sample", return_value={"ok": True, "items": 20, "current_page": 1, "city_code": "010"}
+        ), patch.object(
+            liepin, "extract_page_signature_token", side_effect=lambda item: item.get("jobId") or ""
+        ), patch.object(
+            liepin,
+            "normalize_job_item",
+            side_effect=lambda item: {"source_job_id": item["jobId"], "title": f"职位-{item['jobId']}", "company_name": "测试公司", "city_name": "北京"},
+        ), patch.object(
+            liepin, "city_matches", return_value=True
+        ), patch.object(
+            liepin, "save_to_db", return_value={"new": 1, "updated": 0, "unchanged": 0}
+        ):
+            result = liepin.run_incremental_update(
+                queries=["Java"],
+                cities=["北京"],
+                max_pages=2,
+                page_size=20,
+                source_options={
+                    "city_mode": "precise_if_supported",
+                    "enable_request_probe": True,
+                    "probe_timeout_seconds": 8,
+                },
+            )
+
+        self.assertEqual(result["total_fetched"], 2)
+        self.assertEqual(result["new_to_db"], 2)
+        self.assertEqual(result["captured_request_samples"], 1)
+
+    def test_run_incremental_update_raises_partial_error_with_saved_counts(self) -> None:
+        first_payload = {
+            "items": [{"jobId": "job-1"}],
+            "request_sample": {"url": "https://example.com/liepin-api"},
+        }
+
+        with patch.object(liepin, "ensure_db"), patch.object(liepin, "build_browser_options", return_value=object()), patch.object(
+            liepin, "ChromiumPage", DummyPage
+        ), patch.object(
+            liepin,
+            "capture_current_page_payload",
+            side_effect=lambda *args, **kwargs: kwargs["resolved_city_entries"].update({"北京": {"code": "010", "name": "北京", "search_url": "https://www.liepin.com/city-beijing/"}}) or kwargs["footer_city_pages"].update({"北京": "https://www.liepin.com/city-beijing/"}) or first_payload,
+        ), patch.object(
+            liepin,
+            "normalize_job_item",
+            side_effect=[{"source_job_id": "job-1", "title": "职位-1", "company_name": "测试公司", "city_name": "北京"}, RuntimeError("分页超时")],
+        ), patch.object(
+            liepin, "city_matches", return_value=True
+        ), patch.object(
+            liepin, "extract_page_signature_token", side_effect=lambda item: item.get("jobId") or ""
+        ), patch.object(
+            liepin, "save_to_db", return_value={"new": 1, "updated": 0, "unchanged": 0}
+        ):
+            with self.assertRaises(liepin.PartialCrawlError) as ctx:
+                liepin.run_incremental_update(
+                    queries=["Java"],
+                    cities=["北京"],
+                    max_pages=2,
+                    page_size=20,
+                    source_options={
+                        "city_mode": "precise_if_supported",
+                        "enable_request_probe": False,
+                        "probe_timeout_seconds": 8,
+                    },
+                )
+
+        self.assertEqual(ctx.exception.partial_result["total_fetched"], 1)
+        self.assertEqual(ctx.exception.partial_result["new_to_db"], 1)
+        self.assertEqual(ctx.exception.partial_result["liepin_request_trace"][0]["status"], "exception")
+
 
 if __name__ == "__main__":
     unittest.main()

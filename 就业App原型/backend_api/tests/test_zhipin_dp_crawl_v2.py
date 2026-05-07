@@ -45,7 +45,45 @@ class DummyPage:
         return []
 
 
+class DummyChromiumOptions:
+    def __init__(self, address: str = "") -> None:
+        self.address = address
+        self._address = address
+
+    def set_address(self, value: str) -> None:
+        self.address = value
+        self._address = value
+
+    def set_local_port(self, port: int) -> None:
+        self.set_address(f"127.0.0.1:{port}")
+
+
 class ZhipinDpCrawlV2Tests(unittest.TestCase):
+    def test_ensure_chromium_debug_address_keeps_full_address(self) -> None:
+        options = DummyChromiumOptions("127.0.0.1:9222")
+
+        address = boss_dp.ensure_chromium_debug_address(options)
+
+        self.assertEqual(address, "127.0.0.1:9222")
+        self.assertEqual(options.address, "127.0.0.1:9222")
+
+    def test_ensure_chromium_debug_address_normalizes_port_only(self) -> None:
+        options = DummyChromiumOptions("9222")
+
+        address = boss_dp.ensure_chromium_debug_address(options)
+
+        self.assertEqual(address, "127.0.0.1:9222")
+        self.assertEqual(options.address, "127.0.0.1:9222")
+
+    def test_ensure_chromium_debug_address_allocates_port_when_missing(self) -> None:
+        options = DummyChromiumOptions("")
+
+        with patch.object(boss_dp, "reserve_local_debug_port", return_value=9333):
+            address = boss_dp.ensure_chromium_debug_address(options)
+
+        self.assertEqual(address, "127.0.0.1:9333")
+        self.assertEqual(options.address, "127.0.0.1:9333")
+
     def test_run_incremental_update_returns_boss_dp_trace(self) -> None:
         with patch.object(boss_dp, "ensure_db"), patch.object(boss_dp, "ChromiumPage", return_value=DummyPage()), patch.object(
             boss_dp, "safe_sleep"
@@ -64,17 +102,15 @@ class ZhipinDpCrawlV2Tests(unittest.TestCase):
 
         self.assertEqual(result["total_fetched"], 1)
         self.assertEqual(result["new_to_db"], 1)
-        self.assertEqual(
-            result["boss_dp_summary"],
-            {
-                "trace_count": 1,
-                "api_pages": 1,
-                "html_fallback_pages": 0,
-                "verify_hits": 0,
-                "page_load_failures": 0,
-                "runtime_mode": "hybrid",
-            },
-        )
+        self.assertEqual(result["boss_dp_summary"]["trace_count"], 1)
+        self.assertEqual(result["boss_dp_summary"]["api_pages"], 1)
+        self.assertEqual(result["boss_dp_summary"]["html_fallback_pages"], 0)
+        self.assertEqual(result["boss_dp_summary"]["verify_hits"], 0)
+        self.assertEqual(result["boss_dp_summary"]["page_load_failures"], 0)
+        self.assertEqual(result["boss_dp_summary"]["runtime_mode"], "hybrid")
+        self.assertEqual(result["boss_dp_summary"]["pair_ordering_strategy"], "deferred_high_risk")
+        self.assertEqual(result["boss_dp_summary"]["deferred_pair_count"], 1)
+        self.assertEqual(result["boss_dp_summary"]["deferred_pairs"], [{"query": "Java", "city": "北京"}])
         self.assertEqual(
             result["boss_dp_trace"],
             [
@@ -92,7 +128,28 @@ class ZhipinDpCrawlV2Tests(unittest.TestCase):
                     "verify_hits": 0,
                     "page_load_failures": 0,
                     "runtime_mode": "hybrid",
+                    "risk_bucket": "deferred_high_risk",
+                    "schedule_order": 1,
                 }
+            ],
+        )
+
+    def test_build_ordered_target_pairs_moves_high_risk_pair_to_end(self) -> None:
+        ordered_pairs, deferred_pairs, strategy = boss_dp.build_ordered_target_pairs(
+            prepared_queries=["Java", "Python"],
+            city_items=[("101010100", "北京"), ("101020100", "上海")],
+            source_options={"defer_high_risk_pairs": True},
+        )
+
+        self.assertEqual(strategy, "deferred_high_risk")
+        self.assertEqual(deferred_pairs, [{"query": "Java", "city": "北京"}])
+        self.assertEqual(
+            [(item["query"], item["city_name"], item["risk_bucket"], item["schedule_order"]) for item in ordered_pairs],
+            [
+                ("Java", "上海", "normal", 1),
+                ("Python", "北京", "normal", 2),
+                ("Python", "上海", "normal", 3),
+                ("Java", "北京", "deferred_high_risk", 4),
             ],
         )
 

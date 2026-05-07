@@ -363,7 +363,7 @@ def _run_incremental_crawl(task_id: str, config: dict[str, Any]) -> None:
         stale_after_hours = max(int(config.get("stale_after_hours") or 72), 1)
         set_job_stale_hours(stale_after_hours)
         offline_stats = mark_stale_jobs_inactive(stale_after_hours=stale_after_hours)
-        strong_check_stats = verify_pending_inactive_jobs()
+        strong_check_stats = verify_pending_inactive_jobs(source_codes=list(config.get("sources") or []))
         if isinstance(result, dict):
             result.update(offline_stats)
             result.update(
@@ -375,6 +375,7 @@ def _run_incremental_crawl(task_id: str, config: dict[str, Any]) -> None:
                     "offline_missing_url_count": int(strong_check_stats.get("missing_url_count", 0)),
                     "offline_strong_check_limit": int(strong_check_stats.get("limit", 0)),
                     "offline_strong_check_timeout_seconds": float(strong_check_stats.get("timeout_seconds", 0.0)),
+                    "offline_strong_check_sources": list(strong_check_stats.get("selected_sources") or []),
                 }
             )
         inactive_marked = int(offline_stats.get("inactive_marked", 0))
