@@ -556,6 +556,11 @@ REQUESTS_ONLY_PRESETS: dict[str, dict[str, Any]] = {
                 "queries": ["3", "5", "9"],
                 "cities": ["0"],
             },
+            {
+                "label": "postdoc-edu-admin",
+                "queries": ["11", "12", "13", "14", "23", "24", "38"],
+                "cities": ["0"],
+            },
         ],
     },
     "wuba": {

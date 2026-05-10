@@ -109,30 +109,20 @@ def fetch_job_list(
     should_stop_callback: Callable[[], bool] | None = None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    params = {
-        "columnId": column_id,
-        "city_id": city_id,
-        "education_type": "0",
-        "job_category_id": "0",
-        "major_id": "0",
-        "page": str(page),
-        "pageSize": str(page_size),
-    }
+    del city_id, page_size
+    # Column pages return all jobs on a single page (no pagination)
+    if page > 1:
+        return [], 0
+    column_url = f"{BASE_URL}/column/{column_id}.html"
     for attempt in range(3):
-        ensure_not_cancelled(should_stop_callback, progress_callback, column=column_id, city_id=city_id, page=page)
+        ensure_not_cancelled(should_stop_callback, progress_callback, column=column_id, page=page)
         try:
-            response = session.get(LIST_API_URL, params=params, timeout=timeout, headers=REQUEST_HEADERS)
+            response = session.get(column_url, timeout=timeout, headers=REQUEST_HEADERS)
             if response.status_code == 200:
-                payload = response.json()
-                if int(payload.get("result") or 0) == 1 and payload.get("data"):
-                    data = payload["data"]
-                    html_list = str(data.get("list") or "")
-                    total = int(data.get("jobAccount") or 0)
-                    if not html_list.strip():
-                        return [], total
-                    soup = BeautifulSoup(html_list, "html.parser")
-                    items = parse_list_html(soup)
-                    return items, total
+                response.encoding = "utf-8"
+                soup = BeautifulSoup(response.text, "html.parser")
+                items = parse_list_html(soup)
+                return items, len(items)
             if attempt < 2:
                 time.sleep(2.0)
         except Exception as exc:
@@ -145,39 +135,40 @@ def fetch_job_list(
 
 def parse_list_html(soup: BeautifulSoup) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for li in soup.select("li"):
-        link_tag = li.select_one("a[href]")
-        if not link_tag:
+    for li in soup.find_all("li"):
+        a = li.find("a", href=re.compile(r"/job/detail/"))
+        if not a:
             continue
-        href = str(link_tag.get("href", "")).strip()
+        href = str(a.get("href", "")).strip()
         detail_match = re.search(r"/job/detail/(\d+)\.html", href)
         if not detail_match:
             continue
         source_job_id = detail_match.group(1)
         source_url = BASE_URL + href if href.startswith("/") else href
 
-        title_tag = li.select_one("h4")
-        title = clean_text(title_tag.get_text()) if title_tag else ""
-        title = re.sub(r"^已下线\s*", "", title).strip()
+        title = (a.get("title") or "").strip()
+        if not title:
+            h6 = a.select_one("h6")
+            title = clean_text(h6.get_text()) if h6 else ""
 
-        salary_el = li.select_one(".money")
-        salary_text = clean_text(salary_el.get_text()) if salary_el else ""
+        school_el = a.select_one(".school")
+        company_name = clean_text(school_el.get_text()) if school_el else ""
 
-        org_el = li.select_one(".school-type span")
-        company_name = clean_text(org_el.get_text()) if org_el else ""
-
-        city_el = li.select_one(".city span")
+        city_el = a.select_one(".city")
         city_name = clean_text(city_el.get_text()) if city_el else ""
 
-        req_spans = li.select(".recruitment-content span")
+        money_el = a.select_one(".money")
+        salary_text = clean_text(money_el.get_text()) if money_el else ""
+
         degree_text = ""
         experience_text = ""
-        if len(req_spans) >= 1:
-            degree_text = clean_text(req_spans[0].get_text())
-        if len(req_spans) >= 2:
-            experience_text = clean_text(req_spans[1].get_text())
+        req_el = a.select_one(".requirement")
+        if req_el:
+            req_spans = req_el.select("span")
+            degree_text = clean_text(req_spans[0].get_text()) if len(req_spans) > 0 else ""
+            experience_text = clean_text(req_spans[2].get_text()) if len(req_spans) > 2 else ""
 
-        status = "inactive" if "已下线" in str(link_tag.get("class", [])) or "offline" in str(link_tag.get("class", [])) else "active"
+        status = "inactive" if "已下线" in str(a.get("class", [])) or "offline" in str(a.get("class", [])) else "active"
 
         items.append({
             "source_job_id": source_job_id,
@@ -258,6 +249,10 @@ def run_incremental_update(
 
     session = requests.Session()
     session.headers.update(REQUEST_HEADERS)
+    try:
+        session.get(BASE_URL, timeout=timeout)
+    except Exception:
+        pass
 
     total_fetched = 0
     total_new = 0
