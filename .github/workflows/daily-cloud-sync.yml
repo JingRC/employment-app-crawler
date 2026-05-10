@@ -6,7 +6,7 @@ on:
       requests_sources:
         description: Optional requests-only source codes.
         required: false
-        default: qdhr,sdgxbys,ncss24365,jobmohrss,healthr,healthr_doctor,buildhr,chenhr
+        default: qdhr,qlrc,sdgxbys,sdgxbys_campus,ncss24365,jobmohrss,healthr,healthr_doctor,buildhr,chenhr,jxhg_chenhr,mhg_chenhr,sysh_chenhr,newenergy_chenhr,sales_chenhr,doctor_healthr,pha_healthr,env_buildhr,construct_buildhr,qingdao_rc,rcsd_talents,niuke_campus,yingjiesheng,dxy_job,gaoxiaojob,wuba
       browser_sources:
         description: Optional browser/API source codes.
         required: false
@@ -75,7 +75,7 @@ jobs:
       - name: Run unified daily cloud sync
         working-directory: /tmp/backend_api
         env:
-          REQUESTS_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.requests_sources || 'qdhr,sdgxbys,ncss24365,jobmohrss,healthr,healthr_doctor,buildhr,chenhr' }}
+          REQUESTS_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.requests_sources || 'qdhr,qlrc,sdgxbys,sdgxbys_campus,ncss24365,jobmohrss,healthr,healthr_doctor,buildhr,chenhr,jxhg_chenhr,mhg_chenhr,sysh_chenhr,newenergy_chenhr,sales_chenhr,doctor_healthr,pha_healthr,env_buildhr,construct_buildhr,qingdao_rc,rcsd_talents,niuke_campus,yingjiesheng,dxy_job,gaoxiaojob,wuba' }}
           BROWSER_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.browser_sources || 'zhilian,job51,liepin,shixiseng,guopin' }}
           VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
           RETRY_ONCE_ON_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.retry_once_on_failure || 'true' }}

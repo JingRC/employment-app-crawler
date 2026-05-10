@@ -6,7 +6,7 @@ on:
       sources:
         description: Comma-separated source codes. Use none to skip all sources.
         required: false
-        default: qdhr,sdgxbys,ncss24365,jobmohrss,healthr,buildhr,chenhr
+        default: qdhr,qlrc,sdgxbys,sdgxbys_campus,ncss24365,jobmohrss,healthr,healthr_doctor,buildhr,chenhr,jxhg_chenhr,mhg_chenhr,sysh_chenhr,newenergy_chenhr,sales_chenhr,doctor_healthr,pha_healthr,env_buildhr,construct_buildhr,qingdao_rc,rcsd_talents,niuke_campus,yingjiesheng,dxy_job,gaoxiaojob,wuba
       validate_startup:
         description: Only validate startup, database initialization, and summary writing.
         required: false
@@ -58,7 +58,7 @@ jobs:
       - name: Run requests-only cloud sync
         working-directory: 就业App原型/backend_api
         env:
-          CLOUD_SYNC_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'qdhr,sdgxbys,ncss24365,jobmohrss,healthr,buildhr,chenhr' }}
+          CLOUD_SYNC_SOURCES: ${{ github.event_name == 'workflow_dispatch' && inputs.sources || 'qdhr,qlrc,sdgxbys,sdgxbys_campus,ncss24365,jobmohrss,healthr,healthr_doctor,buildhr,chenhr,jxhg_chenhr,mhg_chenhr,sysh_chenhr,newenergy_chenhr,sales_chenhr,doctor_healthr,pha_healthr,env_buildhr,construct_buildhr,qingdao_rc,rcsd_talents,niuke_campus,yingjiesheng,dxy_job,gaoxiaojob,wuba' }}
           VALIDATE_STARTUP: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_startup || 'false' }}
           RETRY_ONCE_ON_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.retry_once_on_failure || 'true' }}
         run: |
