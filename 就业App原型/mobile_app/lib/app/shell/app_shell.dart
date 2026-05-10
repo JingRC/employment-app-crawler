@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../features/favorites/pages/favorites_page.dart';
 import '../../features/jobs/pages/job_list_page.dart';
 import '../../features/notifications/pages/notifications_page.dart';
+import '../../features/tracking/pages/tracking_board_page.dart';
 import '../../core/network/api_client.dart';
 
 class AppShell extends StatefulWidget {
@@ -17,10 +18,11 @@ class _AppShellState extends State<AppShell> {
 
   int _currentIndex = 0;
   int _favoritesRefreshToken = 0;
+  int _trackingRefreshToken = 0;
   int _notificationsRefreshToken = 0;
   int _unreadNotifications = 0;
 
-  static const List<String> _titles = <String>['职位', '收藏', '通知'];
+  static const List<String> _titles = <String>['职位', '收藏', '投递', '通知'];
 
   @override
   void initState() {
@@ -46,6 +48,7 @@ class _AppShellState extends State<AppShell> {
     final pages = <Widget>[
       const JobListPage(embedded: true),
       FavoritesPage(embedded: true, refreshToken: _favoritesRefreshToken),
+      TrackingBoardPage(embedded: true, refreshToken: _trackingRefreshToken),
       NotificationsPage(
         embedded: true,
         refreshToken: _notificationsRefreshToken,
@@ -72,6 +75,9 @@ class _AppShellState extends State<AppShell> {
               _favoritesRefreshToken++;
             }
             if (index == 2) {
+              _trackingRefreshToken++;
+            }
+            if (index == 3) {
               _notificationsRefreshToken++;
               _refreshNotificationBadge();
             }
@@ -80,6 +86,7 @@ class _AppShellState extends State<AppShell> {
         destinations: [
           NavigationDestination(icon: Icon(Icons.work_outline), label: '职位'),
           const NavigationDestination(icon: Icon(Icons.favorite_border), label: '收藏'),
+          const NavigationDestination(icon: Icon(Icons.work_history_outlined), label: '投递'),
           NavigationDestination(
             icon: Badge(
               isLabelVisible: _unreadNotifications > 0,

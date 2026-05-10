@@ -1702,6 +1702,25 @@ def init_database() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL UNIQUE,
+                tracking_status TEXT NOT NULL DEFAULT 'saved',
+                source_url TEXT DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                applied_at TEXT DEFAULT '',
+                interview_at TEXT DEFAULT '',
+                offer_at TEXT DEFAULT '',
+                result_at TEXT DEFAULT '',
+                result_status TEXT DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES jobs(id)
+            )
+            """
+        )
         _migrate_featured_companies_schema(conn)
         _ensure_table_columns(
             conn,
@@ -4593,3 +4612,266 @@ def sync_crawled_jobs(
         conn.commit()
 
     return stats
+
+
+# ── job_tracking (投递跟踪) ────────────────────────────────────────────
+
+def import_job_with_tracking(
+    *,
+    title: str,
+    company_name: str,
+    city_name: str = "",
+    salary_text: str = "",
+    source_url: str = "",
+    source_code: str = "imported",
+    notes: str = "",
+    tracking_status: str = "saved",
+) -> dict:
+    from app.core.job_sources import get_source_name
+
+    with get_connection() as conn:
+        u_hash = _compute_unique_hash(source_code, company_name, title, city_name)
+        existing = conn.execute(
+            "SELECT id, status FROM jobs WHERE unique_hash = ?", (u_hash,)
+        ).fetchone()
+
+        if existing is not None:
+            job_id = int(existing["id"])
+            if existing["status"] != "active":
+                conn.execute(
+                    "UPDATE jobs SET status = 'active', last_seen_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (job_id,),
+                )
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO jobs (
+                    source_job_id, title, company_name, city_name,
+                    salary_text, source_url, source_code, unique_hash, content_hash, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                """,
+                (
+                    extract_source_job_id_from_url(source_url, source_code),
+                    title,
+                    company_name,
+                    city_name,
+                    salary_text,
+                    source_url,
+                    source_code,
+                    u_hash,
+                    _compute_content_hash(title, salary_text, ""),
+                ),
+            )
+            job_id = int(cursor.lastrowid)
+
+        conn.execute(
+            """
+            INSERT INTO job_tracking (job_id, tracking_status, source_url, notes, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(job_id) DO UPDATE SET
+                tracking_status = excluded.tracking_status,
+                source_url = CASE WHEN excluded.source_url != '' THEN excluded.source_url ELSE job_tracking.source_url END,
+                notes = CASE WHEN excluded.notes != '' THEN excluded.notes ELSE job_tracking.notes END,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (job_id, tracking_status, source_url, notes),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            """
+            SELECT j.id, j.title, j.company_name, j.city_name, j.salary_text,
+                   j.source_url, j.source_code, j.status,
+                   t.tracking_status, t.notes, t.applied_at, t.interview_at,
+                   t.offer_at, t.result_at, t.result_status,
+                   t.created_at, t.updated_at
+            FROM jobs j
+            JOIN job_tracking t ON t.job_id = j.id
+            WHERE j.id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+
+    return _build_tracking_item(row)
+
+
+def extract_source_job_id_from_url(url: str, source_code: str) -> str:
+    try:
+        from app.services.url_platform_detector import extract_source_job_id
+        return extract_source_job_id(url, source_code)
+    except Exception:
+        return ""
+
+
+def _build_tracking_item(row: Any) -> dict:
+    if row is None:
+        return {}
+    source_code = str(row["source_code"] or "imported")
+    return {
+        "job_id": int(row["id"]),
+        "title": str(row["title"] or ""),
+        "company_name": str(row["company_name"] or ""),
+        "city_name": str(row["city_name"] or ""),
+        "salary_text": str(row["salary_text"] or ""),
+        "source_url": str(row["source_url"] or ""),
+        "source_code": source_code,
+        "source_name": get_source_name(source_code),
+        "status": str(row["status"] or "active"),
+        "tracking_status": str(row["tracking_status"] or "saved"),
+        "notes": str(row["notes"] or ""),
+        "applied_at": str(row["applied_at"] or ""),
+        "interview_at": str(row["interview_at"] or ""),
+        "offer_at": str(row["offer_at"] or ""),
+        "result_at": str(row["result_at"] or ""),
+        "result_status": str(row["result_status"] or ""),
+        "created_at": str(row["created_at"] or ""),
+        "updated_at": str(row["updated_at"] or ""),
+    }
+
+
+def list_tracked_jobs(
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    with get_connection() as conn:
+        where_sql = ""
+        params: list[Any] = []
+        if status and status.strip():
+            where_sql = " WHERE t.tracking_status = ?"
+            params.append(status.strip())
+
+        total = conn.execute(
+            f"SELECT COUNT(1) AS count FROM job_tracking t{where_sql}", params
+        ).fetchone()["count"]
+
+        offset = max(0, (page - 1)) * page_size
+        rows = conn.execute(
+            f"""
+            SELECT j.id, j.title, j.company_name, j.city_name, j.salary_text,
+                   j.source_url, j.source_code, j.status,
+                   t.tracking_status, t.notes, t.applied_at, t.interview_at,
+                   t.offer_at, t.result_at, t.result_status,
+                   t.created_at, t.updated_at
+            FROM jobs j
+            JOIN job_tracking t ON t.job_id = j.id
+            {where_sql}
+            ORDER BY t.updated_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params + [page_size, offset],
+        ).fetchall()
+
+        items = [_build_tracking_item(row) for row in rows]
+        summary = get_tracking_summary()
+
+    return {
+        "items": items,
+        "total": int(total),
+        "page": int(page),
+        "page_size": int(page_size),
+        "summary": summary,
+    }
+
+
+def get_tracking_summary() -> dict:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT tracking_status, COUNT(1) AS count
+            FROM job_tracking
+            GROUP BY tracking_status
+            """
+        ).fetchall()
+
+    summary: dict[str, int] = {
+        "saved": 0,
+        "applied": 0,
+        "interview": 0,
+        "offer": 0,
+        "accepted": 0,
+        "rejected": 0,
+    }
+    for row in rows:
+        status = str(row["tracking_status"] or "")
+        count = int(row["count"])
+        if status in summary:
+            summary[status] = count
+    return summary
+
+
+def update_job_tracking(
+    job_id: int,
+    *,
+    tracking_status: str | None = None,
+    notes: str | None = None,
+) -> dict | None:
+    now_sql = "datetime('now','localtime')"
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT tracking_status FROM job_tracking WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        if existing is None:
+            return None
+
+        new_status = tracking_status.strip() if tracking_status else None
+        if new_status and new_status == existing["tracking_status"]:
+            new_status = None
+
+        set_clauses: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
+        params: list[Any] = []
+
+        if new_status:
+            set_clauses.append("tracking_status = ?")
+            params.append(new_status)
+
+            if new_status == "applied" and not existing["tracking_status"] == "applied":
+                set_clauses.append(f"applied_at = COALESCE(NULLIF(applied_at, ''), {now_sql})")
+            elif new_status == "interview":
+                set_clauses.append(f"interview_at = COALESCE(NULLIF(interview_at, ''), {now_sql})")
+            elif new_status == "offer":
+                set_clauses.append(f"offer_at = COALESCE(NULLIF(offer_at, ''), {now_sql})")
+            elif new_status in ("accepted", "rejected"):
+                set_clauses.append(f"result_at = {now_sql}")
+                set_clauses.append("result_status = ?")
+                params.append(new_status)
+
+        if notes is not None:
+            set_clauses.append("notes = ?")
+            params.append(notes.strip())
+
+        if len(set_clauses) == 1:
+            conn.execute(
+                "UPDATE job_tracking SET updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+                (job_id,),
+            )
+        else:
+            params.append(job_id)
+            conn.execute(
+                f"UPDATE job_tracking SET {', '.join(set_clauses)} WHERE job_id = ?",
+                params,
+            )
+        conn.commit()
+
+        row = conn.execute(
+            """
+            SELECT j.id, j.title, j.company_name, j.city_name, j.salary_text,
+                   j.source_url, j.source_code, j.status,
+                   t.tracking_status, t.notes, t.applied_at, t.interview_at,
+                   t.offer_at, t.result_at, t.result_status,
+                   t.created_at, t.updated_at
+            FROM jobs j
+            JOIN job_tracking t ON t.job_id = j.id
+            WHERE j.id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+
+    return _build_tracking_item(row) if row else None
+
+
+def delete_job_tracking(job_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM job_tracking WHERE job_id = ?", (job_id,))
+        conn.commit()
+        return cursor.rowcount > 0

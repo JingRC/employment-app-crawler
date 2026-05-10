@@ -30,6 +30,11 @@ from app.core.database import (
     save_favorite_company,
     save_favorite_job,
     verify_job_offline_status,
+    import_job_with_tracking as _db_import_job_with_tracking,
+    list_tracked_jobs as _db_list_tracked_jobs,
+    get_tracking_summary as _db_get_tracking_summary,
+    update_job_tracking as _db_update_job_tracking,
+    delete_job_tracking as _db_delete_job_tracking,
 )
 
 
@@ -706,3 +711,70 @@ def batch_restore_jobs(job_ids: list[int]) -> dict:
         "items": items,
         "failed_job_ids": failed_job_ids,
     }
+
+
+# ── job tracking service ──────────────────────────────────────────────
+
+def import_job(
+    *,
+    title: str,
+    company_name: str,
+    city_name: str = "",
+    salary_text: str = "",
+    source_url: str = "",
+    source_code: str = "",
+    notes: str = "",
+    tracking_status: str = "saved",
+) -> dict:
+    from app.services.url_platform_detector import detect_platform
+
+    resolved_source_code = (source_code or "").strip().lower()
+    if not resolved_source_code and source_url.strip():
+        detected = detect_platform(source_url.strip())
+        resolved_source_code = str(detected.get("source_code") or "imported")
+    if not resolved_source_code:
+        resolved_source_code = "imported"
+
+    valid_statuses = {"saved", "applied", "interview", "offer", "accepted", "rejected"}
+    if tracking_status.strip() not in valid_statuses:
+        tracking_status = "saved"
+
+    return _db_import_job_with_tracking(
+        title=title,
+        company_name=company_name,
+        city_name=city_name,
+        salary_text=salary_text,
+        source_url=source_url,
+        source_code=resolved_source_code,
+        notes=notes,
+        tracking_status=tracking_status,
+    )
+
+
+def list_tracked_jobs(
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    return _db_list_tracked_jobs(status=status, page=page, page_size=page_size)
+
+
+def get_tracking_summary() -> dict:
+    return _db_get_tracking_summary()
+
+
+def update_tracking(
+    job_id: int,
+    *,
+    tracking_status: str | None = None,
+    notes: str | None = None,
+) -> dict | None:
+    return _db_update_job_tracking(
+        job_id=job_id,
+        tracking_status=tracking_status,
+        notes=notes,
+    )
+
+
+def delete_tracking(job_id: int) -> bool:
+    return _db_delete_job_tracking(job_id)

@@ -9,6 +9,8 @@ import '../../shared/models/favorite_job.dart';
 import '../../shared/models/job_detail.dart';
 import '../../shared/models/job_list_result.dart';
 import '../../shared/models/job_timeline_result.dart';
+import '../../shared/models/job_tracking_item.dart';
+import '../../shared/models/job_tracking_summary.dart';
 import '../../shared/models/notification_item.dart';
 import '../../shared/models/notification_stats.dart';
 import '../../shared/models/saved_search_item.dart';
@@ -182,6 +184,86 @@ class ApiClient {
     );
     final data = _decodeResponse(response);
     return JobTimelineResult.fromJson(data['data'] as Map<String, dynamic>);
+  }
+
+  // ── Tracking ────────────────────────────────────────────────────────
+
+  Future<JobTrackingItem> importJob({
+    required String url,
+    required String title,
+    required String companyName,
+    String cityName = '',
+    String salaryText = '',
+    String sourceCode = '',
+    String notes = '',
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$_baseUrl/jobs/import'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode(<String, dynamic>{
+        'url': url,
+        'title': title,
+        'company_name': companyName,
+        'city_name': cityName,
+        'salary_text': salaryText,
+        'source_code': sourceCode,
+        'notes': notes,
+        'tracking_status': 'saved',
+      }),
+    );
+    final data = _decodeResponse(response);
+    return JobTrackingItem.fromJson(data['data'] as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> fetchTracking({String? status}) async {
+    final uri = Uri.parse('$_baseUrl/tracking').replace(
+      queryParameters: <String, String>{
+        if (status != null && status.isNotEmpty) 'status': status,
+      },
+    );
+    final response = await _client.get(uri);
+    final data = _decodeResponse(response);
+    final raw = data['data'] as Map<String, dynamic>;
+    final items = (raw['items'] as List<dynamic>?)
+        ?.cast<Map<String, dynamic>>()
+        .map(JobTrackingItem.fromJson)
+        .toList() ?? <JobTrackingItem>[];
+    final summary = JobTrackingSummary.fromJson(raw['summary'] as Map<String, dynamic>? ?? <String, dynamic>{});
+    return <String, dynamic>{'items': items, 'summary': summary};
+  }
+
+  Future<void> updateTracking({required int jobId, String? trackingStatus, String? notes}) async {
+    final body = <String, dynamic>{};
+    if (trackingStatus != null) body['tracking_status'] = trackingStatus;
+    if (notes != null) body['notes'] = notes;
+    final response = await _client.patch(
+      Uri.parse('$_baseUrl/tracking/$jobId'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    _decodeResponse(response);
+  }
+
+  Future<bool> deleteTracking(int jobId) async {
+    final response = await _client.delete(Uri.parse('$_baseUrl/tracking/$jobId'));
+    final data = _decodeResponse(response);
+    return (data['data'] ?? false) as bool;
+  }
+
+  static String? detectPlatformFromUrl(String url) {
+    if (url.contains('zhipin.com')) return 'Boss直聘';
+    if (url.contains('zhaopin.com')) return '智联招聘';
+    if (url.contains('51job.com')) return '前程无忧';
+    if (url.contains('liepin.com')) return '猎聘';
+    if (url.contains('shixiseng.com')) return '实习僧';
+    if (url.contains('iguopin.com')) return '国聘';
+    if (url.contains('lagou.com')) return '拉勾';
+    if (url.contains('ncss.cn')) return '24365大学生就业';
+    if (url.contains('yingjiesheng.com')) return '应届生求职网';
+    if (url.contains('nowcoder.com')) return '牛客校招';
+    if (url.contains('58.com')) return '58同城招聘';
+    if (url.contains('gaoxiaojob.com')) return '高校人才网';
+    return null;
   }
 
   Map<String, dynamic> _decodeResponse(http.Response response) {

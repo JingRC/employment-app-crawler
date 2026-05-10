@@ -96,6 +96,26 @@ class _FavoritesPageState extends State<FavoritesPage> {
     }
   }
 
+  Future<void> _startTrackingFromFavorite(FavoriteJob job) async {
+    try {
+      await _apiClient.importJob(
+        url: '', title: job.title, companyName: job.companyName,
+        cityName: job.cityName, salaryText: job.salaryText,
+        sourceCode: job.sourceName, notes: '',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已开始跟踪: ${job.title} → 前往"投递"标签查看')),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('开始跟踪失败: $error')),
+        );
+      }
+    }
+  }
+
   Future<void> _toggleSavedSearch(SavedSearchItem item, bool enabled) async {
     setState(() {
       _updating = true;
@@ -211,9 +231,19 @@ class _FavoritesPageState extends State<FavoritesPage> {
               item.salaryText,
               item.sourceName,
             ].where((value) => value.isNotEmpty).join(' · ')),
-            trailing: IconButton(
-              onPressed: _updating ? null : () => _removeFavoriteJob(item.jobId),
-              icon: const Icon(Icons.delete_outline),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  onPressed: _updating ? null : () => _startTrackingFromFavorite(item),
+                  icon: const Icon(Icons.playlist_add, size: 20),
+                  tooltip: '开始跟踪投递',
+                ),
+                IconButton(
+                  onPressed: _updating ? null : () => _removeFavoriteJob(item.jobId),
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                ),
+              ],
             ),
           );
         },

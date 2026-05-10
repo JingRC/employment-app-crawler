@@ -1,45 +1,93 @@
 # 就业 App 原型
 
-本目录包含两个最小项目骨架：
+两个独立软件，一个后台一个前台：
 
-1. backend_api: FastAPI 后端原型
-2. mobile_app: Flutter 前端原型
+## 软件一：就业数据后台
 
-## FastAPI 启动
+爬虫采集 + API 服务 + 数据管理 + Web 管理面板
 
-1. 进入 backend_api
-2. 安装依赖: pip install -r requirements.txt
-3. 可选初始化数据库: python init_db.py
-4. 启动服务: uvicorn app.main:app --reload
-5. Windows 下一键启动:
-	- 推荐: 在 PowerShell 中执行 ./start_backend.ps1
-	- 兼容方式: 双击 backend_api/start_backend.bat，或在 PowerShell 中执行 ./start_backend.bat
-	- 两个启动脚本都会在服务起来后自动打开浏览器首页 http://127.0.0.1:8000/
-6. Boss Cookie 预热:
-	- 前端推荐流程：先点“打开 Boss 登录页”，登录完成后再点“我已登录，开始保存 Boss Cookie”
-	- 如需先确认状态，可点“检测当前 Boss Cookie”查看是否存在、是否完整
-	- 备用方式：在 PowerShell 中执行 ./prepare_boss_cookie.ps1
-	- 两种方式都会把 Cookie 保存到 zhipin_secrets.json
+| 功能 | 说明 |
+|------|------|
+| 自动爬取 | 31 个招聘平台，每天定时采集 |
+| API 接口 | RESTful API，供手机 App 调用 |
+| Web 面板 | `http://127.0.0.1:8000/` 查看数据、管理爬虫 |
+| 数据库 | SQLite，保存在 `backend_api/data/jobs.db` |
 
-说明:
+### 启动方式
 
-1. 首次启动时会自动创建 SQLite 数据库并导入 [代码/提交/joblist_Java_101120200.json](代码/提交/joblist_Java_101120200.json) 样本数据
-2. SQLite 文件位置为 backend_api/data/jobs.db
-3. 可访问接口:
-	1. /api/jobs
-	2. /api/jobs/{job_id}
-	3. /api/favorites/companies
-	4. /api/notifications
+```
+双击 → 启动后台.bat
+```
 
-## Flutter 启动
+或命令行：
 
-1. 确保本机已安装 Flutter SDK
-2. 进入 mobile_app
-3. 执行: flutter pub get
-4. 执行: flutter run
+```
+cd backend_api
+pip install -r requirements.txt
+python init_db.py
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
-## 当前状态
+启动后浏览器打开 `http://127.0.0.1:8000/`
 
-1. 后端提供基于 SQLite 的职位列表、职位详情、收藏企业、通知列表接口
-2. 前端提供职位列表页、职位详情页、收藏页、通知页的基础页面
-3. 当前职位数据来自本地样本 JSON，后续可替换为真实采集导入流程
+---
+
+## 软件二：就业手机 App (Flutter)
+
+职位浏览 + 收藏 + 投递跟踪
+
+| 页面 | 说明 |
+|------|------|
+| 职位 | 搜索/筛选/查看职位详情 |
+| 收藏 | 收藏感兴趣的职位和企业 |
+| 投递 | 导入外部职位链接 + 跟踪投递进度 |
+| 通知 | 新职位匹配通知 |
+
+### 启动方式
+
+```
+双击 → 启动手机APP.bat
+```
+
+前提：电脑已安装 Flutter SDK，手机 USB 连接并开启调试模式。
+
+真机调试需修改 `mobile_app/lib/core/network/api_client.dart` 中的 `_baseUrl` 为电脑局域网 IP。
+
+---
+
+## 项目结构
+
+```
+就业App原型/
+├── 启动后台.bat          ← 一键启动后台
+├── 启动手机APP.bat       ← 一键启动 App
+├── backend_api/          ← FastAPI 后台
+│   ├── app/
+│   │   ├── api/routes/   ← API 路由
+│   │   ├── core/         ← 数据库、来源配置
+│   │   ├── models/       ← 数据模型
+│   │   ├── schemas/      ← 请求/响应模型
+│   │   └── services/     ← 业务逻辑
+│   ├── data/jobs.db      ← SQLite 数据库
+│   └── static/index.html ← Web 管理面板
+└── mobile_app/           ← Flutter 手机 App
+    └── lib/
+        ├── app/shell/    ← App 框架 (Tab导航)
+        ├── core/network/ ← API 客户端
+        ├── features/
+        │   ├── jobs/     ← 职位模块
+        │   ├── favorites/← 收藏模块
+        │   ├── tracking/ ← 投递跟踪模块
+        │   └── notifications/ ← 通知模块
+        └── shared/models/← 共享数据模型
+```
+
+## API 接口一览
+
+| 模块 | 接口 |
+|------|------|
+| 职位 | `GET /api/jobs` `GET /api/jobs/{id}` |
+| 收藏 | `POST/GET/DELETE /api/favorites/jobs` |
+| 投递 | `POST /api/jobs/import` `GET/PATCH/DELETE /api/tracking` |
+| 通知 | `GET /api/notifications` `GET /api/notifications/stats` |
+| 爬虫 | `POST /api/crawler/start` `GET /api/crawler/status` |

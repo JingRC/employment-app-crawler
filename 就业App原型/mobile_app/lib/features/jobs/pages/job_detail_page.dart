@@ -8,6 +8,7 @@ import '../../../shared/models/job_detail.dart';
 import '../../../shared/models/job_timeline_entry.dart';
 import '../../../shared/models/job_timeline_event.dart';
 import '../../../shared/models/job_timeline_result.dart';
+import '../../../shared/models/job_tracking_item.dart';
 import '../../../shared/models/notification_item.dart';
 
 class JobDetailPage extends StatefulWidget {
@@ -25,7 +26,9 @@ class _JobDetailPageState extends State<JobDetailPage> {
   bool _loading = true;
   bool _submittingJobFavorite = false;
   bool _submittingFavorite = false;
+  bool _submittingTracking = false;
   String? _error;
+  String? _trackingStatus;
   final Set<String> _expandedTimelineEntries = <String>{};
   JobDetail? _jobDetail;
   JobTimelineResult _timeline = const JobTimelineResult(
@@ -33,6 +36,11 @@ class _JobDetailPageState extends State<JobDetailPage> {
     events: <JobTimelineEvent>[],
     timeline: <JobTimelineEntry>[],
   );
+
+  static const _trackingStatusLabels = {
+    'saved': '待投递', 'applied': '已投递', 'interview': '面试中',
+    'offer': '已获Offer', 'accepted': '已录用', 'rejected': '已拒绝',
+  };
 
   @override
   void initState() {
@@ -50,6 +58,7 @@ class _JobDetailPageState extends State<JobDetailPage> {
       final results = await Future.wait<dynamic>([
         _apiClient.fetchJobDetail(widget.jobId),
         _apiClient.fetchJobTimeline(widget.jobId),
+        _checkTrackingStatus(),
       ]);
       if (!mounted) {
         return;
@@ -57,6 +66,7 @@ class _JobDetailPageState extends State<JobDetailPage> {
       setState(() {
         _jobDetail = results[0] as JobDetail;
         _timeline = results[1] as JobTimelineResult;
+        _trackingStatus = results[2] as String?;
       });
     } catch (error) {
       if (!mounted) {
@@ -159,6 +169,43 @@ class _JobDetailPageState extends State<JobDetailPage> {
           _submittingJobFavorite = false;
         });
       }
+    }
+  }
+
+  Future<String?> _checkTrackingStatus() async {
+    try {
+      final result = await _apiClient.fetchTracking();
+      final items = result['items'] as List<dynamic>;
+      for (final item in items) {
+        if (item is JobTrackingItem && item.jobId == widget.jobId) {
+          return item.trackingStatus;
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _startTracking(JobDetail job) async {
+    if (_submittingTracking) return;
+    setState(() => _submittingTracking = true);
+    try {
+      await _apiClient.importJob(
+        url: job.officialApplyUrl,
+        title: job.title,
+        companyName: job.companyName,
+        cityName: job.cityName,
+        salaryText: job.salaryText,
+        notes: '',
+      );
+      if (!mounted) return;
+      setState(() => _trackingStatus = 'saved');
+      _showMessage('已添加到投递跟踪');
+    } catch (error) {
+      if (mounted) _showMessage('开始跟踪失败: $error');
+    } finally {
+      if (mounted) setState(() => _submittingTracking = false);
     }
   }
 
@@ -465,6 +512,28 @@ class _JobDetailPageState extends State<JobDetailPage> {
             ],
           ),
           const SizedBox(height: 12),
+          if (_trackingStatus != null)
+            Row(
+              children: [
+                Chip(
+                  avatar: const Icon(Icons.work_history, size: 18),
+                  label: Text('投递状态: ${_trackingStatusLabels[_trackingStatus] ?? _trackingStatus}'),
+                  backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                ),
+              ],
+            )
+          else
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _submittingTracking ? null : () => _startTracking(job),
+                icon: _submittingTracking
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.playlist_add),
+                label: const Text('开始跟踪投递'),
+              ),
+            ),
+          const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
             child: FilledButton(
