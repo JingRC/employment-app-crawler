@@ -53,6 +53,22 @@ CITY_SUBDOMAIN_MAP: dict[str, str] = {
     "大连": "dl", "沈阳": "sy", "宁波": "nb", "昆明": "km",
     "石家庄": "sjz", "哈尔滨": "heb", "长春": "cc", "无锡": "wx",
     "佛山": "fs",
+    # Tier 2/3 cities
+    "珠海": "zh", "惠州": "huizhou", "中山": "zs", "嘉兴": "jx",
+    "温州": "wz", "绍兴": "sx", "台州": "tz", "泉州": "qz",
+    "徐州": "xz", "常州": "cz", "扬州": "yz", "烟台": "yt",
+    "潍坊": "wf", "淄博": "zb", "洛阳": "luoyang", "襄阳": "xy",
+    "柳州": "liuzhou", "桂林": "gl", "绵阳": "my", "宜宾": "yb",
+    "遵义": "zunyi", "兰州": "lz", "银川": "yc", "西宁": "xn",
+    "包头": "bt", "三亚": "sanya", "海口": "haikou", "拉萨": "lasa",
+    "乌鲁木齐": "wlmq", "唐山": "ts", "邯郸": "hd", "保定": "bd",
+    "大同": "datong", "运城": "yuncheng", "鄂尔多斯": "erds",
+    "鞍山": "anshan", "吉林": "jil", "齐齐哈尔": "qqhe",
+    "连云港": "lyg", "淮安": "huaian", "湖州": "huzhou",
+    "芜湖": "wuhu", "九江": "jiujiang", "赣州": "ganzhou",
+    "开封": "kaifeng", "新乡": "xinxiang", "黄石": "huangshi",
+    "十堰": "shiyan", "衡阳": "hengyang", "常德": "changde",
+    "汕头": "shantou", "湛江": "zhanjiang", "肇庆": "zhaoqing",
 }
 
 
