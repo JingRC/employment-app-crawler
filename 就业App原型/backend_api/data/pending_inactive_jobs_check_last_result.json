@@ -1,6 +1,6 @@
 {
-  "started_at": "2026-05-29T01:20:37.112260+00:00",
-  "finished_at": "2026-05-29T01:20:37.113055+00:00",
+  "started_at": "2026-05-29T13:42:47.025088+00:00",
+  "finished_at": "2026-05-29T13:42:47.025767+00:00",
   "validate_startup": false,
   "task_name": "待复核下线职位批量 URL 健康检查",
   "selected_sources": [
@@ -24,21 +24,7 @@
     "healthr_doctor",
     "sdgxbys_campus",
     "qlrc",
-    "niuke_campus",
-    "yingjiesheng",
-    "dxy_job",
-    "gaoxiaojob",
-    "wuba",
-    "jobonline",
-    "jxhg_chenhr",
-    "mhg_chenhr",
-    "sysh_chenhr",
-    "newenergy_chenhr",
-    "sales_chenhr",
-    "doctor_healthr",
-    "pha_healthr",
-    "env_buildhr",
-    "construct_buildhr"
+    "gaoxiaojob"
   ],
   "verified_count": 0,
   "restored_count": 0,
