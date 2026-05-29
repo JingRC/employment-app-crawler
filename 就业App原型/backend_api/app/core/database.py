@@ -2967,6 +2967,7 @@ def verify_pending_inactive_jobs(
     limit: int = DEFAULT_OFFLINE_STRONG_CHECK_LIMIT,
     timeout_seconds: float = DEFAULT_OFFLINE_STRONG_CHECK_TIMEOUT_SECONDS,
     source_codes: list[str] | None = None,
+    workers: int = 8,
 ) -> dict[str, Any]:
     normalized_limit = max(int(limit or DEFAULT_OFFLINE_STRONG_CHECK_LIMIT), 0)
     normalized_timeout = max(float(timeout_seconds or DEFAULT_OFFLINE_STRONG_CHECK_TIMEOUT_SECONDS), 1.0)
