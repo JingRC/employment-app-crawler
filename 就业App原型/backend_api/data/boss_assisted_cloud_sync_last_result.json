@@ -1,0 +1,124 @@
+{
+  "started_at": "2026-05-29T08:07:10.763329+00:00",
+  "finished_at": "2026-05-29T08:12:38.423902+00:00",
+  "validate_startup": false,
+  "overall_status": "success",
+  "task_name": "Boss 辅助型云任务",
+  "selected_queries": [
+    "Java",
+    "Python",
+    "前端",
+    "测试"
+  ],
+  "selected_cities": [
+    "北京",
+    "上海",
+    "青岛",
+    "济南",
+    "杭州",
+    "深圳"
+  ],
+  "total_fetched": 0,
+  "total_new": 0,
+  "total_updated": 0,
+  "results": [
+    {
+      "source_code": "boss_dp",
+      "status": "success",
+      "total_fetched": 0,
+      "new_to_db": 0,
+      "updated_in_db": 0,
+      "details": {
+        "total_fetched": 0,
+        "new_to_db": 0,
+        "cities": 6,
+        "queries": 4,
+        "runtime_mode": "browser",
+        "boss_dp_summary": {
+          "trace_count": 3,
+          "api_pages": 0,
+          "html_fallback_pages": 0,
+          "verify_hits": 3,
+          "page_load_failures": 0,
+          "cookie_refreshes": 0,
+          "conservative_first_round": true,
+          "conservative_round_hits": 1,
+          "first_round_page_cap": 1,
+          "auto_expand_after_stable": true,
+          "stable_expansion_unlocked": false,
+          "runtime_mode": "browser",
+          "requested_browser": "chrome",
+          "actual_browser": "chrome",
+          "browser_profile": "Default",
+          "use_system_profile": false,
+          "pair_ordering_strategy": "deferred_high_risk",
+          "deferred_pair_count": 1,
+          "deferred_pairs": [
+            {
+              "query": "Java",
+              "city": "北京"
+            }
+          ]
+        },
+        "boss_dp_trace": [
+          {
+            "query": "Java",
+            "location_name": "上海",
+            "city_code": "101020100",
+            "status": "verify_page",
+            "pages_completed": 0,
+            "fetched_count": 0,
+            "new_count": 0,
+            "updated_count": 0,
+            "api_pages": 0,
+            "html_fallback_pages": 0,
+            "verify_hits": 1,
+            "page_load_failures": 0,
+            "runtime_mode": "browser",
+            "risk_bucket": "normal",
+            "schedule_order": 1
+          },
+          {
+            "query": "Java",
+            "location_name": "青岛",
+            "city_code": "101120200",
+            "status": "verify_page",
+            "pages_completed": 0,
+            "fetched_count": 0,
+            "new_count": 0,
+            "updated_count": 0,
+            "api_pages": 0,
+            "html_fallback_pages": 0,
+            "verify_hits": 1,
+            "page_load_failures": 0,
+            "runtime_mode": "browser",
+            "risk_bucket": "normal",
+            "schedule_order": 2
+          },
+          {
+            "query": "Java",
+            "location_name": "济南",
+            "city_code": "101120100",
+            "status": "verify_page",
+            "pages_completed": 0,
+            "fetched_count": 0,
+            "new_count": 0,
+            "updated_count": 0,
+            "api_pages": 0,
+            "html_fallback_pages": 0,
+            "verify_hits": 1,
+            "page_load_failures": 0,
+            "runtime_mode": "browser",
+            "risk_bucket": "normal",
+            "schedule_order": 3
+          }
+        ]
+      },
+      "note": "Boss 辅助型浏览器任务已独立执行。"
+    }
+  ],
+  "notes": [
+    "Boss 辅助型云任务与默认日更主链路隔离调度。",
+    "若 Boss 触发验证码、风控或浏览器环境异常，只影响本任务，不影响默认 requests/browser 日更。"
+  ]
+}
