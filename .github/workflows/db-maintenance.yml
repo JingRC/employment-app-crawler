@@ -1,0 +1,87 @@
+name: db-maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: Days to retain job change events.
+        required: false
+        type: number
+        default: 90
+      skip_purge:
+        description: Skip purging old change events.
+        required: false
+        type: boolean
+        default: false
+      skip_backfill:
+        description: Skip backfilling missing dedup keys.
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '13 5 * * 0'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-maintenance-db-write
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            就业App原型/backend_api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 就业App原型/backend_api/requirements.txt
+
+      - name: Initialize database
+        working-directory: 就业App原型/backend_api
+        run: python init_db.py
+
+      - name: Run database maintenance
+        working-directory: 就业App原型/backend_api
+        env:
+          MAINT_RETENTION_DAYS: ${{ github.event_name == 'workflow_dispatch' && inputs.retention_days || 90 }}
+          MAINT_SKIP_PURGE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_purge || 'false' }}
+          MAINT_SKIP_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_backfill || 'false' }}
+        run: |
+          args=()
+          args+=(--retention-days "$MAINT_RETENTION_DAYS")
+          if [ "$MAINT_SKIP_PURGE" = "true" ]; then
+            args+=(--skip-purge)
+          fi
+          if [ "$MAINT_SKIP_BACKFILL" = "true" ]; then
+            args+=(--skip-backfill)
+          fi
+          python run_db_maintenance.py "${args[@]}"
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 就业App原型/backend_api/data/jobs.db 就业App原型/backend_api/data/db_maintenance_last_result.json
+          if git diff --cached --quiet; then
+            echo "No database changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: database maintenance cleanup"
+          git push

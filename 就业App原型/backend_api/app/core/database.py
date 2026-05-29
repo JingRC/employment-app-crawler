@@ -210,12 +210,24 @@ OFFLINE_INVALID_PAGE_KEYWORDS = (
 @contextmanager
 def get_connection() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = _safe_connect()
     conn.row_factory = sqlite3.Row
     try:
         yield conn
     finally:
         conn.close()
+
+
+def _safe_connect() -> sqlite3.Connection:
+    """Connect to the database, removing the file if it is corrupt (e.g. LFS pointer)."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("SELECT 1")
+        return conn
+    except sqlite3.DatabaseError:
+        conn.close()
+        DB_PATH.unlink(missing_ok=True)
+        return sqlite3.connect(DB_PATH)
 
 
 def set_job_stale_hours(stale_after_hours: int | None) -> int:
